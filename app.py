@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import FancyBboxPatch
 import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity as _cosine_sklearn
 
 st.set_page_config(
     page_title="Allsvenskan Analytics", page_icon="⚽",
