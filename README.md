@@ -59,3 +59,4 @@ Task Scheduler: Måndag 23:00 + Tisdag 08:00
 ## Data
 Statistik från [FBRef.com](https://fbref.com) · Allsvenskan comp ID: 29
 Säsonger: 2001, 2022, 2023, 2025
+"# 90mindata" 
