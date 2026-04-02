@@ -78,9 +78,14 @@ def read_sheet(path):
     for row in rows[header_idx + 1:]:
         if not any(row): continue
         d = dict(zip(cols, row))
-        if d.get("Player") in (None, 'Player', 'Matches'): continue
-        if d.get("Squad")  in (None, 'Squad'):              continue
-        if d.get("Player") is None and d.get("Squad") is None: continue
+        player_val = d.get("Player")
+        squad_val  = d.get("Squad")
+        # Skip header/empty marker rows
+        if player_val in ('Player', 'Matches'): continue
+        if squad_val  in ('Squad',):            continue
+        # Skip completely empty rows
+        if player_val is None and squad_val is None: continue
+        # Squad-only rows (no Player col) are valid — keep them
         records.append(d)
     return records
 
@@ -171,8 +176,16 @@ def _fullname_key(name):
         return (parts[0][0], parts[-1])
     return (parts[0][0], parts[0])
 
+def _strip_q(v):
+    """Strip surrounding quotes from Excel string values."""
+    if v is None: return None
+    s = str(v).strip()
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'": return s[1:-1]
+    return s
+
 def read_xg_file(path):
     """Läs xG/xA/xP-fil med förkortade, dubblade namn.
+    Hanterar både col0 och col1 som namnkolumn, samt citattecken.
     Returnerar dict: (initial, efternamn) → {xG, xA, xP, xPpx}
     """
     if not path or not os.path.exists(path): return {}
@@ -181,21 +194,42 @@ def read_xg_file(path):
     except Exception as e:
         print(f"    ⚠ Kunde inte läsa {os.path.basename(path)}: {e}")
         return {}
-    ws = wb.active
+    ws  = wb.active
+    rows = list(ws.iter_rows(values_only=True))
+    if not rows: return {}
+
+    # Detect which column has player names (col 0 or col 1)
+    # and where xG/xA/xP columns are
+    name_col = 1  # default (old format)
+    xg_col, xa_col, xp_col, xp90_col = 5, 6, 7, 8
+
+    # Check header row
+    for i, row in enumerate(rows[:3]):
+        cols = [_strip_q(v) for v in row]
+        if 'SPELARE' in str(cols[0]):
+            name_col = 0  # new format: name in col 0
+        for j, v in enumerate(cols):
+            sv = str(v or '').upper()
+            if sv == 'XG':   xg_col  = j
+            elif sv == 'XA': xa_col  = j
+            elif sv == 'XP': xp_col  = j
+            elif 'XP/90' in sv or sv == 'XP90': xp90_col = j
+
     result = {}
-    for row in ws.iter_rows(values_only=True):
-        raw_name = row[1]
-        if not raw_name or str(raw_name).strip() in ('', 'SPELARE'): continue
-        name = _dedupe_name(str(raw_name))
+    for row in rows:
+        raw_name = _strip_q(row[name_col]) if len(row) > name_col else None
+        if not raw_name or raw_name.upper() in ('SPELARE', '', 'PLAYER'): continue
+
+        name = _dedupe_name(raw_name)
         key  = _abbrev_key(name)
         if not key: continue
         try:
             result[key] = {
-                "xG":   to_float(row[5]),
-                "xA":   to_float(row[6]),
-                "xP":   to_float(row[7]),
-                "xPpx": to_float(row[8]),
-                "_xg_name": name,  # for debugging
+                "xG":   to_float(row[xg_col]   if len(row) > xg_col   else 0),
+                "xA":   to_float(row[xa_col]   if len(row) > xa_col   else 0),
+                "xP":   to_float(row[xp_col]   if len(row) > xp_col   else 0),
+                "xPpx": to_float(row[xp90_col] if len(row) > xp90_col else 0),
+                "_xg_name": name,
             }
         except Exception:
             continue
