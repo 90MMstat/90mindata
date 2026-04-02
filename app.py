@@ -110,12 +110,6 @@ ALL_RADAR = {
     "Skott/90":        ("shPer90",   6.0,  False),
     "SoT%":            ("sotPct",    70,   False),
     "Mål/Skott":       ("gPerSh",    0.3,  False),
-    "xG/90":           ("xGpx",      1.5,  False),
-    "xA/90":           ("xApx",      0.5,  False),
-    "xG vs Mål":       ("gMinusXG",  5,    False),
-    "xP":              ("xP",          20,  False),
-    "xP/90":           ("xPpx",       15,   False),
-    "Ass. vs xA":      ("aMinusXA",   5,    False),
     "Brytningar/90":   ("intPer90",  4.0,  False),
     "Tacklingar/90":   ("tklWPer90", 4.0,  False),
     "Inlägg":     ("crs",       80,   False),
@@ -132,9 +126,9 @@ ALL_RADAR = {
 
 DEFAULT_RADAR = {
     "GK": ["Räddn%  (MV)","IM/90  (MV)","Nollor%  (MV)","Räddningar (MV)","Vinster (MV)"],
-    "DF": ["Brytningar/90","Tacklingar/90","Inlägg","Mål/90","xA/90","xP/90"],
-    "MF": ["Mål/90","Assist/90","xG/90","xA/90","xP/90","Skott/90","Brytningar/90"],
-    "FW": ["Mål/90","Assist/90","xG/90","xA/90","Skott/90","SoT%","Mål/Skott"],
+    "DF": ["Brytningar/90","Tacklingar/90","Inlägg","Mål/90","Assist/90"],
+    "MF": ["Mål/90","Assist/90","Skott/90","SoT%","Brytningar/90","Tacklingar/90","Frisparkar/90"],
+    "FW": ["Mål/90","Assist/90","Skott/90","SoT%","Mål/Skott","Frisparkar/90"],
     "U":  ["Mål/90","Assist/90","Skott/90","Brytningar/90","Tacklingar/90"],
 }
 
