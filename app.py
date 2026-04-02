@@ -1994,8 +1994,8 @@ elif "Ålder" in view:
         text=[names[i].split()[-1] for i in idx_ifk] if show_labels else None,
         textposition="top center",
         textfont=dict(color="#a0c8ff", size=10),
-        customtext=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_ifk],
-        hovertemplate="<b>%{customtext}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
+        customdata=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_ifk],
+        hovertemplate="<b>%{customdata}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
     ))
 
     # Liga-snitt linje
