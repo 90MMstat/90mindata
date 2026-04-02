@@ -59,7 +59,6 @@ div[role="radiogroup"] label { color:#a0c0e0 !important; }
 </style>""", unsafe_allow_html=True)
 
 # ── Data ───────────────────────────────────────────────────────────────────────
-@st.cache_data
 def load_data():
     try:
         with open("data.json", encoding="utf-8") as f:
