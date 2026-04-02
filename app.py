@@ -69,14 +69,7 @@ def load_data():
         st.stop()
 
 DB = load_data()
-# Seasons with player data OR match log files
-import os as _os
-SEASONS_AVAIL = sorted(
-    [y for y in DB["seasons"] if DB["seasons"][y].get("players")] +
-    [y for y in ["2024","2023","2022","2001"] 
-     if y not in DB["seasons"] and _os.path.exists(f"match_data_{y}.json")],
-    reverse=True
-)
+SEASONS_AVAIL = sorted([y for y in DB["seasons"] if DB["seasons"][y].get("players")], reverse=True)
 
 def f(v): return v if isinstance(v,(int,float)) and not math.isnan(v) else 0
 
@@ -422,6 +415,60 @@ def radar_config(key, pg="MF"):
     )
     return chosen, show_avg
 
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("""<div style='display:flex;align-items:center;gap:10px;
+         padding:0 0 16px;border-bottom:1px solid #1a2540;margin-bottom:16px;'>
+        <div style='width:36px;height:36px;border-radius:8px;
+             background:linear-gradient(135deg,#003399,#1a5fcc);
+             display:flex;align-items:center;justify-content:center;'>
+            <span style='color:white;font-size:18px;'>⚽</span></div>
+        <div><div style='color:#e2e8f0;font-weight:700;font-size:14px;'>Allsvenskan</div>
+             <div style='color:#4a6080;font-size:10px;'>Analytics · FBRef</div></div></div>
+    """, unsafe_allow_html=True)
+
+    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg"],
+                    label_visibility="collapsed")
+    st.divider()
+    st.markdown("**Säsong**")
+    season = st.selectbox("Säsong", SEASONS_AVAIL, label_visibility="collapsed")
+    df_all = players_df(season)
+
+    st.markdown("**Position**")
+    pos_filter = st.selectbox("Position",
+        ["Alla","GK – Målvakter","DF – Försvarare","MF – Mittfältare","FW – Anfallare"],
+        label_visibility="collapsed")
+    pos_sel = {"Alla":"ALL","GK – Målvakter":"GK","DF – Försvarare":"DF",
+               "MF – Mittfältare":"MF","FW – Anfallare":"FW"}[pos_filter]
+
+    st.markdown("**Lag**")
+    all_teams = sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
+    team_opts = ["Alla lag"] + (["IFK Göteborg"] if "IFK Göteborg" in all_teams else [])
+    team_opts += [t for t in all_teams if t not in ("IFK Göteborg","Alla lag")]
+    team_filter = st.selectbox("Lag", team_opts, label_visibility="collapsed")
+    team_sel = None if team_filter == "Alla lag" else team_filter
+
+    st.markdown("**Sök**")
+    search = st.text_input("", placeholder="Spelarnamn…", label_visibility="collapsed")
+
+    st.divider()
+    if not df_all.empty:
+        st.caption(f"📊 {len(df_all)} spelare · {season}")
+        ifk_n = len(df_all[df_all.squad=="IFK Göteborg"])
+        st.caption(f"🔵 {ifk_n} IFK Göteborg")
+        xg_n = df_all["xGpx"].apply(f).gt(0).sum() if "xGpx" in df_all else 0
+        if xg_n: st.caption(f"📈 {int(xg_n)} med xG-data")
+
+def filt(df):
+    out = df.copy()
+    if pos_sel != "ALL":   out = out[out.pos_group == pos_sel]
+    if team_sel:           out = out[out.squad == team_sel]
+    if search:             out = out[out.name.str.contains(search, case=False, na=False)]
+    return out
+
+df_filt = filt(df_all) if not df_all.empty else pd.DataFrame()
+
+# ══ VIEW: IFK Göteborg ════════════════════════════════════════════════════════
 if "IFK Göteborg" in view:
     st.markdown(f"# 🔵 IFK Göteborg — {season}")
     ifk = df_all[df_all.squad=="IFK Göteborg"].copy() if not df_all.empty else pd.DataFrame()
@@ -495,17 +542,17 @@ if "IFK Göteborg" in view:
 
         # ── Scouting Report export
         st.markdown("---")
-        st.markdown("#### 📄 Scouting Rapport")
-        if st.button("Generera Scouting Rapport (PNG)", key="sr_ifk"):
+        st.markdown("#### 📄 Scouting Report")
+        if st.button("Generera Scouting Report (PNG)", key="sr_ifk"):
             with st.spinner("Genererar rapport…"):
                 try:
                     buf = generate_scouting_report(p_dict, season)
                     st.image(buf, use_column_width=True)
                     buf.seek(0)
                     st.download_button(
-                        "⬇️  Ladda ner rapport (PNG)",
+                        "⬇️  Ladda ner PNG",
                         data=buf,
-                        file_name=f"scouting_rapport_{sel.replace(' ','_')}_{season}.png",
+                        file_name=f"scouting_{sel.replace(' ','_')}_{season}.png",
                         mime="image/png",
                         key="dl_sr_ifk",
                     )
@@ -555,17 +602,17 @@ elif "Alla spelare" in view:
             st.divider()
             scout_panel(p_dict, season)
             st.markdown("---")
-            st.markdown("#### 📄 Scouting Rapport")
-            if st.button("Generera Scouting Rapport (PNG)", key="sr_league"):
+            st.markdown("#### 📄 Scouting Report")
+            if st.button("Generera Scouting Report (PNG)", key="sr_league"):
                 with st.spinner("Genererar rapport…"):
                     try:
                         buf = generate_scouting_report(p_dict, season)
                         st.image(buf, use_column_width=True)
                         buf.seek(0)
                         st.download_button(
-                            "⬇️  Ladda ner rapport (PNG)",
+                            "⬇️  Ladda ner PNG",
                             data=buf,
-                            file_name=f"scouting_rapport_{sel.replace(' ','_')}_{season}.png",
+                            file_name=f"scouting_{sel.replace(' ','_')}_{season}.png",
                             mime="image/png",
                             key="dl_sr_league",
                         )
@@ -1081,7 +1128,6 @@ elif "Säsongsöversikt" in view:
         with open(match_file, encoding='utf-8') as mf:
             matches = json.load(mf)
 
-    # df_all may be empty for seasons with only match data (e.g. 2024 before player files added)
     ifk_all = df_all[df_all.squad == "IFK Göteborg"].copy() if not df_all.empty else pd.DataFrame()
     sq_df   = squads_df(season)
     ifk_sq  = sq_df[sq_df.squad == "IFK Göteborg"].iloc[0].to_dict()               if not sq_df.empty and "IFK Göteborg" in sq_df.squad.values else {}
@@ -1506,265 +1552,6 @@ elif "Nästa Steg" in view:
                 if fig_ns:
                     st.plotly_chart(fig_ns, use_container_width=True, config={"displayModeBar":False})
             scout_panel(p_ns, season)
-# ══ VIEW: FORMTABELL ═════════════════════════════════════════════════════════
-elif "Formtabell" in view:
-    st.markdown(f"# 📋 Formtabell — Allsvenskan {season}")
-    st.caption("Baserat på matchloggar för IFK Göteborg")
-
-    import os as _os2, glob as _glob2
-    match_files = sorted(_glob2.glob("match_data_*.json"), reverse=True)
-    if not match_files:
-        st.warning("Inga matchloggfiler hittades. Lägg till match_data_YYYY.json i mappen.")
-        st.stop()
-
-    n_form = st.radio("Visa senaste", [5, 10, 15, "Alla"],
-                      horizontal=True, label_visibility="collapsed", key="form_n")
-
-    all_seasons_data = {}
-    for mf in match_files:
-        yr = mf.replace("match_data_","").replace(".json","")
-        with open(mf, encoding="utf-8") as f_mf:
-            matches = json.load(f_mf)
-        if n_form != "Alla":
-            matches = matches[-int(n_form):]
-        all_seasons_data[yr] = matches
-
-    # ── Form per season
-    for yr in sorted(all_seasons_data.keys(), reverse=True):
-        matches = all_seasons_data[yr]
-        if not matches: continue
-
-        w = sum(1 for m in matches if m["result"]=="W")
-        d_ = sum(1 for m in matches if m["result"]=="D")
-        l = sum(1 for m in matches if m["result"]=="L")
-        pts = w*3+d_
-        gf = sum(m["gf"] for m in matches)
-        ga = sum(m["ga"] for m in matches)
-
-        form_icons = {"W":"🟢","D":"🟡","L":"🔴"}
-        form_str = " ".join(form_icons.get(m["result"],"⚪") for m in matches)
-
-        st.markdown(f"### {yr}")
-        st.markdown(f"""
-<div style='background:#0a1525;border:1px solid #1a3050;border-radius:10px;
-     padding:16px 20px;margin-bottom:16px;'>
-  <div style='font-size:20px;letter-spacing:4px;margin-bottom:12px;'>{form_str}</div>
-  <div style='display:flex;gap:24px;flex-wrap:wrap;'>
-    <div><span style='color:#4a6080;font-size:11px;'>VINSTER</span>
-         <div style='color:#30c060;font-size:22px;font-weight:800;'>{w}</div></div>
-    <div><span style='color:#4a6080;font-size:11px;'>OAVGJORT</span>
-         <div style='color:#f0a030;font-size:22px;font-weight:800;'>{d_}</div></div>
-    <div><span style='color:#4a6080;font-size:11px;'>FÖRLUSTER</span>
-         <div style='color:#e05050;font-size:22px;font-weight:800;'>{l}</div></div>
-    <div><span style='color:#4a6080;font-size:11px;'>POÄNG</span>
-         <div style='color:#3a80ff;font-size:22px;font-weight:800;'>{pts}</div></div>
-    <div><span style='color:#4a6080;font-size:11px;'>MÅL</span>
-         <div style='color:#e2e8f0;font-size:22px;font-weight:800;'>{gf}–{ga}</div></div>
-    <div><span style='color:#4a6080;font-size:11px;'>POÄNG/MATCH</span>
-         <div style='color:#e2e8f0;font-size:22px;font-weight:800;'>{pts/max(len(matches),1):.2f}</div></div>
-  </div>
-</div>""", unsafe_allow_html=True)
-
-        # Match-för-match rad
-        cols = st.columns(len(matches))
-        for col_el, m in zip(cols, matches):
-            res_col = {"W":"#30c060","D":"#f0a030","L":"#e05050"}.get(m["result"],"#5070a0")
-            score = f"{m['gf']}–{m['ga']}"
-            opp = m["opponent"][:8]
-            hb = "H" if m["venue"]=="Home" else "B"
-            col_el.markdown(f"""
-<div style='background:#0d1829;border-top:3px solid {res_col};border-radius:0 0 6px 6px;
-     padding:6px 4px;text-align:center;'>
-  <div style='font-size:10px;color:#3a5070;'>{hb}</div>
-  <div style='font-size:9px;color:#7090b0;'>{opp}</div>
-  <div style='font-size:13px;font-weight:800;color:#e2e8f0;'>{score}</div>
-  <div style='font-size:9px;color:{res_col};font-weight:700;'>{m["result"]}</div>
-</div>""", unsafe_allow_html=True)
-
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
-
-        # Skott & possession chart
-        with st.expander(f"📊 Detaljstatistik {yr}"):
-            sh_data = [m.get("sh",0) or 0 for m in matches]
-            sot_data = [m.get("sot",0) or 0 for m in matches]
-            poss_data = [m.get("poss",0) or 0 for m in matches]
-            labels_f = [f"O{m['round']} {m['opponent'][:8]}" for m in matches]
-            res_colors_f = [{"W":"#30c060","D":"#f0a030","L":"#e05050"}.get(m["result"],"#5070a0")
-                           for m in matches]
-
-            fig_form = go.Figure()
-            fig_form.add_trace(go.Bar(
-                x=labels_f, y=sh_data, name="Skott",
-                marker=dict(color=res_colors_f, line_width=0),
-                hovertemplate="%{x}<br>Skott: %{y}<extra></extra>",
-            ))
-            fig_form.add_trace(go.Scatter(
-                x=labels_f, y=poss_data, name="Bollinnehav %",
-                mode="lines+markers", yaxis="y2",
-                line=dict(color="#3a80ff", width=2),
-                marker=dict(size=6),
-                hovertemplate="%{x}<br>Boll: %{y:.0f}%<extra></extra>",
-            ))
-            fig_form.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(color="#7090b0", size=10),
-                xaxis=dict(gridcolor="#1a2540", tickangle=-45,
-                           tickfont=dict(color="#5070a0",size=9)),
-                yaxis=dict(gridcolor="#1a2540", title="Skott"),
-                yaxis2=dict(overlaying="y", side="right",
-                            title="Boll %", range=[20,80],
-                            tickfont=dict(color="#3a80ff")),
-                legend=dict(font=dict(color="#a0c0e0"), bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=0,r=40,t=10,b=60), height=280,
-            )
-            st.plotly_chart(fig_form, use_container_width=True, config={"displayModeBar":False})
-
-
-# ══ VIEW: ÅLDER & PRESTANDA ═══════════════════════════════════════════════════
-elif "Ålder" in view:
-    st.markdown(f"# 🔵 Ålder & Prestanda — Allsvenskan {season}")
-    st.caption("Bubbelstorlek = spelade minuter · IFK Göteborg markerade i blått")
-
-    if df_all.empty:
-        st.warning("Ingen data.")
-        st.stop()
-
-    # Controls
-    ca, cb, cc, cd = st.columns(4)
-    with ca:
-        y_metric = st.selectbox("Y-axel (prestanda)", [
-            "glsPer90","astPer90","xGpx","xApx","xPpx",
-            "shPer90","sotPct","intPer90","tklWPer90","gPerSh",
-        ], format_func=lambda x: {
-            "glsPer90":"Mål/90","astPer90":"Assist/90",
-            "xGpx":"xG/90","xApx":"xA/90","xPpx":"xP/90",
-            "shPer90":"Skott/90","sotPct":"SoT%",
-            "intPer90":"Brytningar/90","tklWPer90":"Tacklingar/90",
-            "gPerSh":"Mål/Skott",
-        }.get(x,x), label_visibility="collapsed", key="scatter_y")
-    with cb:
-        pos_sc = st.selectbox("Position", ["Alla","GK","DF","MF","FW"],
-                               label_visibility="collapsed", key="scatter_pos")
-    with cc:
-        min_min_sc = st.slider("Min minuter", 100, 1500, 400, key="scatter_min")
-    with cd:
-        show_labels = st.checkbox("Visa namn (IFK)", value=True, key="scatter_labels")
-
-    # Filter
-    df_sc = df_all[df_all["min"].apply(f) >= min_min_sc].copy()
-    if pos_sc != "Alla":
-        df_sc = df_sc[df_sc.pos_group == pos_sc]
-    df_sc = df_sc[df_sc["age"].apply(f) > 0]
-
-    if df_sc.empty:
-        st.info("Inga spelare matchade filtret.")
-        st.stop()
-
-    # Build scatter
-    is_ifk   = df_sc["squad"] == "IFK Göteborg"
-    ages     = df_sc["age"].apply(f).tolist()
-    y_vals   = df_sc[y_metric].apply(f).tolist() if y_metric in df_sc.columns else [0]*len(df_sc)
-    sizes    = [max(f(m)/50, 5) for m in df_sc["min"].tolist()]
-    colors   = ["#3a80ff" if i else "#1a2540" for i in is_ifk]
-    borders  = ["#60c0ff" if i else "#2a3a50" for i in is_ifk]
-    names    = df_sc["name"].tolist()
-    squads   = df_sc["squad"].tolist()
-    mins     = df_sc["min"].apply(f).tolist()
-
-    y_label = {
-        "glsPer90":"Mål/90","astPer90":"Assist/90",
-        "xGpx":"xG/90","xApx":"xA/90","xPpx":"xP/90",
-        "shPer90":"Skott/90","sotPct":"SoT%",
-        "intPer90":"Brytningar/90","tklWPer90":"Tacklingar/90",
-        "gPerSh":"Mål/Skott",
-    }.get(y_metric, y_metric)
-
-    fig_sc = go.Figure()
-
-    # Non-IFK first (background)
-    idx_other = [i for i,v in enumerate(is_ifk) if not v]
-    idx_ifk   = [i for i,v in enumerate(is_ifk) if v]
-
-    fig_sc.add_trace(go.Scatter(
-        x=[ages[i] for i in idx_other],
-        y=[y_vals[i] for i in idx_other],
-        mode="markers",
-        name="Övriga lag",
-        marker=dict(
-            size=[sizes[i] for i in idx_other],
-            color="#1a2f50", line=dict(color="#2a4060", width=0.5),
-            opacity=0.6,
-        ),
-        text=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_other],
-        hovertemplate="<b>%{text}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
-    ))
-
-    # IFK on top
-    fig_sc.add_trace(go.Scatter(
-        x=[ages[i] for i in idx_ifk],
-        y=[y_vals[i] for i in idx_ifk],
-        mode="markers+text" if show_labels else "markers",
-        name="IFK Göteborg",
-        marker=dict(
-            size=[sizes[i] for i in idx_ifk],
-            color="#3a80ff",
-            line=dict(color="#60c0ff", width=1.5),
-            opacity=0.9,
-        ),
-        text=[names[i].split()[-1] for i in idx_ifk] if show_labels else None,
-        textposition="top center",
-        textfont=dict(color="#a0c8ff", size=10),
-        customtext=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_ifk],
-        hovertemplate="<b>%{customtext}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
-    ))
-
-    # Liga-snitt linje
-    if y_vals:
-        avg_y = sum(y_vals) / len(y_vals)
-        fig_sc.add_hline(
-            y=avg_y,
-            line=dict(color="#3a5070", dash="dot", width=1),
-            annotation_text=f"Snitt: {avg_y:.2f}",
-            annotation_font=dict(color="#4a6080", size=10),
-        )
-
-    fig_sc.update_layout(
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#7090b0", size=11),
-        xaxis=dict(
-            title="Ålder", gridcolor="#1a2540",
-            tickfont=dict(color="#5070a0"),
-            titlefont=dict(color="#5070a0"),
-        ),
-        yaxis=dict(
-            title=y_label, gridcolor="#1a2540",
-            tickfont=dict(color="#5070a0"),
-            titlefont=dict(color="#5070a0"),
-        ),
-        legend=dict(font=dict(color="#a0c0e0"), bgcolor="rgba(0,0,0,0)",
-                    orientation="h", y=-0.12, x=0.5, xanchor="center"),
-        margin=dict(l=20,r=20,t=20,b=60),
-        height=560,
-        hovermode="closest",
-    )
-    st.plotly_chart(fig_sc, use_container_width=True, config={"displayModeBar":False})
-
-    # Top performers table
-    st.divider()
-    st.markdown("### Topprestörer i vald statistik")
-    top_sc = df_sc.sort_values(y_metric, ascending=False).head(15) if y_metric in df_sc.columns else df_sc.head(15)
-    disp_cols = ["name","squad","pos","age","min",y_metric]
-    avail_disp = [c for c in disp_cols if c in top_sc.columns]
-    ren_disp = {"name":"Spelare","squad":"Lag","pos":"Pos","age":"Ålder",
-                "min":"Min",y_metric:y_label}
-    tbl_disp = top_sc[avail_disp].rename(columns=ren_disp).reset_index(drop=True)
-    if "Min" in tbl_disp:
-        tbl_disp["Min"] = tbl_disp["Min"].apply(lambda v: str(int(f(v))).replace(",",".") if v else "—")
-    if y_label in tbl_disp:
-        tbl_disp[y_label] = tbl_disp[y_label].apply(lambda v: f"{f(v):.2f}" if v else "—")
-    st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=420)
-
-
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SCOUTING REPORT GENERATOR
@@ -1886,7 +1673,6 @@ def generate_scouting_report(p, season):
     # ──────────────────────────────────────────────────────────────────────────
     BG   = "#0d0d0d"
     CARD = "#161616"
-    matplotlib.rcParams['font.family'] = 'DejaVu Sans'
     fig  = plt.figure(figsize=(20, 10), facecolor=BG)
     fig.patch.set_facecolor(BG)
 
@@ -2032,61 +1818,4 @@ def generate_scouting_report(p, season):
     plt.close(fig)
     buf.seek(0)
     return buf
-
-
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""<div style='display:flex;align-items:center;gap:10px;
-         padding:0 0 16px;border-bottom:1px solid #1a2540;margin-bottom:16px;'>
-        <div style='width:36px;height:36px;border-radius:8px;
-             background:linear-gradient(135deg,#003399,#1a5fcc);
-             display:flex;align-items:center;justify-content:center;'>
-            <span style='color:white;font-size:18px;'>⚽</span></div>
-        <div><div style='color:#e2e8f0;font-weight:700;font-size:14px;'>Allsvenskan</div>
-             <div style='color:#4a6080;font-size:10px;'>Analytics · FBRef</div></div></div>
-    """, unsafe_allow_html=True)
-
-    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg","📋 Formtabell","🔵 Ålder & Prestanda"],
-                    label_visibility="collapsed")
-    st.divider()
-    st.markdown("**Säsong**")
-    season = st.selectbox("Säsong", SEASONS_AVAIL, label_visibility="collapsed")
-    df_all = players_df(season)
-
-    st.markdown("**Position**")
-    pos_filter = st.selectbox("Position",
-        ["Alla","GK – Målvakter","DF – Försvarare","MF – Mittfältare","FW – Anfallare"],
-        label_visibility="collapsed")
-    pos_sel = {"Alla":"ALL","GK – Målvakter":"GK","DF – Försvarare":"DF",
-               "MF – Mittfältare":"MF","FW – Anfallare":"FW"}[pos_filter]
-
-    st.markdown("**Lag**")
-    all_teams = sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
-    team_opts = ["Alla lag"] + (["IFK Göteborg"] if "IFK Göteborg" in all_teams else [])
-    team_opts += [t for t in all_teams if t not in ("IFK Göteborg","Alla lag")]
-    team_filter = st.selectbox("Lag", team_opts, label_visibility="collapsed")
-    team_sel = None if team_filter == "Alla lag" else team_filter
-
-    st.markdown("**Sök**")
-    search = st.text_input("", placeholder="Spelarnamn…", label_visibility="collapsed")
-
-    st.divider()
-    if not df_all.empty:
-        st.caption(f"📊 {len(df_all)} spelare · {season}")
-        ifk_n = len(df_all[df_all.squad=="IFK Göteborg"])
-        st.caption(f"🔵 {ifk_n} IFK Göteborg")
-        xg_n = df_all["xGpx"].apply(f).gt(0).sum() if "xGpx" in df_all else 0
-        if xg_n: st.caption(f"📈 {int(xg_n)} med xG-data")
-
-def filt(df):
-    out = df.copy()
-    if pos_sel != "ALL":   out = out[out.pos_group == pos_sel]
-    if team_sel:           out = out[out.squad == team_sel]
-    if search:             out = out[out.name.str.contains(search, case=False, na=False)]
-    return out
-
-df_filt = filt(df_all) if not df_all.empty else pd.DataFrame()
-
-# ══ VIEW: IFK Göteborg ════════════════════════════════════════════════════════
 
