@@ -434,7 +434,7 @@ def process_competition(comp_dir, year, competition="allsvenskan"):
         "*Expected*","*xG*","*xg*","*Advanced*","*advanced*"
     ])))
     # xG/xA/xP-fil med förkortade namn (t.ex. "xG_ xA _ xP 2025.xlsx")
-    xgap_path = auto_find(comp_dir, ["*xG*xA*xP*","*xA*xP*","xG_*","*xG_*"])
+    xgap_path = auto_find(comp_dir, ["xG, xA*","xG*.xlsx","*xG*xA*","*xG*xP*","*xA*xP*","xG_*","*xG_*","*xG*.xlsx"])
     xgap_idx  = read_xg_file(xgap_path) if xgap_path else {}
 
     names = set(std_r)|set(sh_r)|set(misc_r)|set(gk_r)|set(pt_r)
@@ -543,10 +543,27 @@ if __name__ == "__main__":
         # ── Allsvenskan (main)
         ps, sq = process_competition(year_player, year, "allsvenskan")
         # ── Komplettera med xG/xA/xP-fil om den finns i rooten
-        xgap_root = find_file(DATA_ROOT, [
-            f"*xG*xA*xP*{year}*", f"*{year}*xG*xA*",
-            f"xG__xA___xP_{year}.xlsx", f"xG_ xA _ xP {year}.xlsx",
-        ])
+        # Search for xG file in multiple locations
+        xgap_root = None
+        for search_dir in [
+            DATA_ROOT,
+            os.path.join(DATA_ROOT, "Player", year),
+            os.path.join(DATA_ROOT, "Squad", year),
+            year_player,
+        ]:
+            if not os.path.isdir(search_dir): continue
+            xgap_root = find_file(search_dir, [
+                f"xG, xA, xP {year}.xlsx",
+                f"xG, xA & xP {year}.xlsx",
+                f"xG, xA, xP {year}*.xlsx",
+                f"*xG*xA*xP*{year}*",
+                f"*{year}*xG*xA*",
+                f"xG__xA___xP_{year}.xlsx",
+                f"xG_ xA _ xP {year}.xlsx",
+                f"*xG*{year}*.xlsx",
+            ])
+            if xgap_root:
+                break
         if xgap_root:
             root_xgap = read_xg_file(xgap_root)
             print(f"      → xG/xA/xP root-fil: {os.path.basename(xgap_root)} ({len(root_xgap)} spelare)")
