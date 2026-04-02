@@ -415,6 +415,274 @@ def radar_config(key, pg="MF"):
     )
     return chosen, show_avg
 
+# ═════════════════════════════════════════════════════════════════════════════
+# SCOUTING REPORT GENERATOR
+# ═════════════════════════════════════════════════════════════════════════════
+
+SECTION_METRICS = {
+    "GK": {
+        "Räddning":   [("Räddn. %",  "gkSavePct",  100, False),
+                       ("Nollor %",  "gkCSPct",    100, False),
+                       ("Räddningar","gkSaves",    200, False)],
+        "Mål emot":   [("IM/90",     "gkGA90",      3,  True ),
+                       ("SoT emot",  "gkSoTA",     200, True )],
+        "Spelartid":  [("Minuter",   "min",       2700, False),
+                       ("Matcher",   "mp",           30, False)],
+    },
+    "DF": {
+        "Försvar":    [("Bryt./90",  "intPer90",    4, False),
+                       ("Tackl./90", "tklWPer90",   4, False),
+                       ("Krossn.",   "crs",         80, False)],
+        "Anfall":     [("Mål/90",    "glsPer90",  0.5, False),
+                       ("Assist/90", "astPer90",  0.4, False),
+                       ("xA/90",     "xApx",      0.4, False)],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+    "MF": {
+        "Anfall":     [("Mål/90",    "glsPer90",  1.0, False),
+                       ("Assist/90", "astPer90",  0.6, False),
+                       ("xG/90",     "xGpx",      1.0, False),
+                       ("xA/90",     "xApx",      0.5, False)],
+        "Passning":   [("Skott/90",  "shPer90",   4.0, False),
+                       ("SoT%",      "sotPct",     70, False),
+                       ("xP/90",     "xPpx",       15, False)],
+        "Försvar":    [("Bryt./90",  "intPer90",   4, False),
+                       ("Tackl./90", "tklWPer90",  4, False),
+                       ("Frispk/90", "fldPer90",   4, False)],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+    "FW": {
+        "Målscoring": [("Mål/90",    "glsPer90",  1.5, False),
+                       ("xG/90",     "xGpx",      1.5, False),
+                       ("Mål vs xG", "gMinusXG",   5, False),
+                       ("Skott/90",  "shPer90",    6, False)],
+        "Kvalitet":   [("SoT%",      "sotPct",     70, False),
+                       ("Mål/Skott", "gPerSh",    0.3, False),
+                       ("xA/90",     "xApx",      0.5, False)],
+        "Rörelse":    [("Assist/90", "astPer90",  0.6, False),
+                       ("Frispk/90", "fldPer90",   4, False),
+                       ("Offside",   "off",        20, True )],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+}
+
+SECTION_COLORS = {
+    "Målscoring": "#e05050", "Anfall":  "#e05050",
+    "Försvar":    "#30c060", "Räddning":"#3a80ff",
+    "Passning":   "#f0a030", "Mål emot":"#a050e0",
+    "Kvalitet":   "#00e8c8", "Rörelse": "#f0a030",
+    "Spelartid":  "#7090b0", "Disciplin":"#d09030",
+    "Resultat":   "#7080ff",
+}
+
+def _pv(v, mx, inv=False, pct_d=None, key=None):
+    if pct_d and key and key in pct_d: return int(pct_d[key])
+    p = min(round((f(v) / max(mx, 0.001)) * 100), 100)
+    return max(0, 100 - p if inv else p)
+
+def _grade(score):
+    if score >= 80: return "A"
+    if score >= 65: return "B"
+    if score >= 50: return "C"
+    if score >= 35: return "D"
+    return "F"
+
+def _grade_color(grade):
+    return {"A":"#00e8c8","B":"#30c060","C":"#f0a030","D":"#d04040","F":"#a02020"}.get(grade,"#888")
+
+def _radar_labels_for_pos(pg):
+    """Get radar labels and pct values for a player and its avg."""
+    return DEFAULT_RADAR.get(pg, DEFAULT_RADAR["U"])
+
+def generate_scouting_report(p, season):
+    """Generate a scouting report image. Returns BytesIO PNG."""
+    pg    = pos_group(p.get("pos",""))
+    pct_d = p.get("pct", {})
+    avg_d = league_avg(season, pg)
+    secs  = SECTION_METRICS.get(pg, SECTION_METRICS["MF"])
+
+    # ── Calculate section scores
+    section_scores = {}
+    for sec_name, metrics in secs.items():
+        vals = [_pv(p.get(k,0), mx, inv, pct_d, k) for _,k,mx,inv in metrics]
+        section_scores[sec_name] = round(sum(vals)/len(vals)) if vals else 0
+    overall = round(sum(section_scores.values()) / len(section_scores))
+    grade   = _grade(overall)
+
+    # ── Radar data
+    radar_mets  = _radar_labels_for_pos(pg)
+    radar_lbls  = radar_mets
+    n_ax        = len(radar_lbls)
+    angles      = np.linspace(0, 2*np.pi, n_ax, endpoint=False).tolist()
+    angles_closed = angles + [angles[0]]
+
+    def get_pcts(src_dict, is_avg=False):
+        vals = []
+        for m in radar_lbls:
+            key, mx, inv = ALL_RADAR[m]
+            v = f(src_dict.get(key, 0))
+            vals.append(_pv(v, mx, inv) if is_avg else _pv(v, mx, inv, pct_d, key))
+        return vals + [vals[0]]
+
+    player_pcts = get_pcts(p)
+    avg_pcts    = get_pcts(avg_d, is_avg=True) if avg_d else [0]*(n_ax+1)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FIGURE
+    # ──────────────────────────────────────────────────────────────────────────
+    BG   = "#0d0d0d"
+    CARD = "#161616"
+    fig  = plt.figure(figsize=(20, 10), facecolor=BG)
+    fig.patch.set_facecolor(BG)
+
+    # Title
+    title_name = p.get("name","")
+    fig.text(0.5, 0.96, f"SCOUTING REPORT: {title_name.upper()}",
+             ha="center", va="top", color="white",
+             fontsize=24, fontweight="bold")
+    fig.text(0.5, 0.91,
+             f"{p.get('squad','')}  ·  {p.get('pos','')}  ·  {p.get('age','')} ÅR  ·  Allsvenskan {season}",
+             ha="center", va="top", color="#8090a0", fontsize=12)
+
+    # ── LEFT panel: Horizontal bar chart (section scores)
+    ax_bar = fig.add_axes([0.03, 0.10, 0.28, 0.76])
+    ax_bar.set_facecolor(CARD)
+    for spine in ax_bar.spines.values(): spine.set_visible(False)
+
+    sec_names  = list(section_scores.keys())
+    sec_vals   = [section_scores[s] for s in sec_names]
+    sec_colors = [SECTION_COLORS.get(s,"#4a6080") for s in sec_names]
+    y_pos      = np.arange(len(sec_names))
+
+    bars = ax_bar.barh(y_pos, sec_vals, color=sec_colors, height=0.55,
+                       edgecolor="none", zorder=3)
+    ax_bar.set_xlim(0, 110)
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(sec_names, color="white", fontsize=13, fontweight="bold")
+    ax_bar.set_xticks([0, 25, 50, 75, 100])
+    ax_bar.tick_params(colors="#4a6080", labelsize=10)
+    ax_bar.xaxis.tick_bottom()
+    ax_bar.set_xlim(0, 115)
+    ax_bar.grid(axis="x", color="#2a2a2a", linewidth=0.8, zorder=0)
+
+    # Value labels
+    for bar, val in zip(bars, sec_vals):
+        ax_bar.text(val + 2, bar.get_y() + bar.get_height()/2,
+                    f"{val}", va="center", ha="left",
+                    color="white", fontsize=13, fontweight="bold")
+
+    ax_bar.set_title("Sektionspoäng", color="white", fontsize=13,
+                     fontweight="bold", pad=10)
+
+    # ── MIDDLE panel: Player info + grade
+    ax_mid = fig.add_axes([0.34, 0.10, 0.28, 0.76])
+    ax_mid.set_facecolor(CARD)
+    ax_mid.axis("off")
+
+    info_lines = [
+        ("Namn:",    p.get("name","")),
+        ("Lag:",     p.get("squad","")),
+        ("Position:",p.get("pos","")),
+        ("Ålder:",   f"{p.get('age','')} år"),
+        ("Nation:",  p.get("nation","")),
+        ("Säsong:",  season),
+        ("Minuter:", f"{int(p.get('min',0)):,}".replace(",",".")),
+    ]
+    # Add xG if available
+    if p.get("xGpx",0) > 0:
+        info_lines.append(("xG/90:", f"{p.get('xGpx',0):.2f}"))
+    if p.get("xApx",0) > 0:
+        info_lines.append(("xA/90:", f"{p.get('xApx',0):.2f}"))
+    if p.get("xPpx",0) > 0:
+        info_lines.append(("xP/90:", f"{p.get('xPpx',0):.2f}"))
+
+    y_start = 0.88
+    ax_mid.text(0.5, 0.96, "Spelarinformation",
+                ha="center", va="top", transform=ax_mid.transAxes,
+                color="white", fontsize=13, fontweight="bold")
+    for label, value in info_lines:
+        ax_mid.text(0.1, y_start, label, transform=ax_mid.transAxes,
+                    color="#8090a0", fontsize=12, va="top")
+        ax_mid.text(0.52, y_start, value, transform=ax_mid.transAxes,
+                    color="white", fontsize=12, va="top", fontweight="bold")
+        y_start -= 0.09
+
+    # Grade badge
+    gc = _grade_color(grade)
+    grade_box = FancyBboxPatch((0.15, 0.04), 0.70, 0.20,
+                                boxstyle="round,pad=0.02",
+                                facecolor=gc+"22", edgecolor=gc,
+                                linewidth=2, transform=ax_mid.transAxes)
+    ax_mid.add_patch(grade_box)
+    ax_mid.text(0.5, 0.14, f"Betyg:  {grade}",
+                ha="center", va="center", transform=ax_mid.transAxes,
+                color=gc, fontsize=22, fontweight="bold")
+    ax_mid.text(0.5, 0.07, f"Overall: {overall}/100",
+                ha="center", va="center", transform=ax_mid.transAxes,
+                color="#8090a0", fontsize=11)
+
+    # ── RIGHT panel: Radar
+    ax_rad = fig.add_axes([0.64, 0.07, 0.34, 0.82], polar=True)
+    ax_rad.set_facecolor("#0a0f1a")
+
+    # Gridlines
+    for level in [25, 50, 75, 100]:
+        ax_rad.plot(angles_closed, [level]*(n_ax+1),
+                    color="#1a2540", lw=0.7, zorder=1)
+
+    # Avg fill
+    ax_rad.fill(angles, avg_pcts[:-1], color="#606060", alpha=0.15, zorder=2)
+    ax_rad.plot(angles_closed, avg_pcts, color="#e05050", lw=1.5,
+                linestyle="--", zorder=3, label="Ligasnitt")
+
+    # Player fill
+    ax_rad.fill(angles, player_pcts[:-1], color="#30a060", alpha=0.30, zorder=4)
+    ax_rad.plot(angles_closed, player_pcts, color="#30ff80", lw=2.5,
+                zorder=5, label=title_name)
+
+    # Dots
+    ax_rad.scatter(angles, player_pcts[:-1], color="#30ff80", s=40, zorder=6)
+
+    ax_rad.set_xticks(angles)
+    ax_rad.set_xticklabels(radar_lbls, color="white", fontsize=10.5,
+                            fontweight="bold")
+    ax_rad.set_ylim(0, 100)
+    ax_rad.set_yticks([25, 50, 75, 100])
+    ax_rad.set_yticklabels(["25","50","75","100"], color="#4a5568", fontsize=8)
+    ax_rad.tick_params(colors="#4a5568")
+    ax_rad.spines["polar"].set_color("#1a2540")
+    ax_rad.grid(color="#1a2540", lw=0.5)
+    ax_rad.set_title("Spelare vs Ligasnitt (percentil)",
+                     color="white", fontsize=12, fontweight="bold", pad=18)
+
+    # Legend
+    handles = [
+        mpatches.Patch(facecolor="#30ff80", alpha=0.6, label=title_name),
+        mpatches.Patch(facecolor="#e05050", alpha=0.5, label="Ligasnitt"),
+    ]
+    ax_rad.legend(handles=handles, loc="lower center",
+                  bbox_to_anchor=(0.5, -0.12), ncol=2,
+                  facecolor="#161616", edgecolor="#1a2540",
+                  labelcolor="white", fontsize=10)
+
+    # Footer
+    fig.text(0.98, 0.01, "Allsvenskan Analytics · FBRef data",
+             ha="right", va="bottom", color="#2a3a50", fontsize=9)
+
+    plt.tight_layout(rect=[0, 0.02, 1, 0.90])
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor=BG, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+
 # ── Sidebar ────────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("""<div style='display:flex;align-items:center;gap:10px;
@@ -542,17 +810,17 @@ if "IFK Göteborg" in view:
 
         # ── Scouting Report export
         st.markdown("---")
-        st.markdown("#### 📄 Scouting Report")
-        if st.button("Generera Scouting Report (PNG)", key="sr_ifk"):
+        st.markdown("#### 📄 Scouting Rapport")
+        if st.button("Generera Scouting Rapport (PNG)", key="sr_ifk"):
             with st.spinner("Genererar rapport…"):
                 try:
                     buf = generate_scouting_report(p_dict, season)
                     st.image(buf, use_column_width=True)
                     buf.seek(0)
                     st.download_button(
-                        "⬇️  Ladda ner PNG",
+                        "⬇️  Ladda ner rapport (PNG)",
                         data=buf,
-                        file_name=f"scouting_{sel.replace(' ','_')}_{season}.png",
+                        file_name=f"scouting_rapport_{sel.replace(' ','_')}_{season}.png",
                         mime="image/png",
                         key="dl_sr_ifk",
                     )
@@ -602,17 +870,17 @@ elif "Alla spelare" in view:
             st.divider()
             scout_panel(p_dict, season)
             st.markdown("---")
-            st.markdown("#### 📄 Scouting Report")
-            if st.button("Generera Scouting Report (PNG)", key="sr_league"):
+            st.markdown("#### 📄 Scouting Rapport")
+            if st.button("Generera Scouting Rapport (PNG)", key="sr_league"):
                 with st.spinner("Genererar rapport…"):
                     try:
                         buf = generate_scouting_report(p_dict, season)
                         st.image(buf, use_column_width=True)
                         buf.seek(0)
                         st.download_button(
-                            "⬇️  Ladda ner PNG",
+                            "⬇️  Ladda ner rapport (PNG)",
                             data=buf,
-                            file_name=f"scouting_{sel.replace(' ','_')}_{season}.png",
+                            file_name=f"scouting_rapport_{sel.replace(' ','_')}_{season}.png",
                             mime="image/png",
                             key="dl_sr_league",
                         )
@@ -1552,270 +1820,3 @@ elif "Nästa Steg" in view:
                 if fig_ns:
                     st.plotly_chart(fig_ns, use_container_width=True, config={"displayModeBar":False})
             scout_panel(p_ns, season)
-
-# ═════════════════════════════════════════════════════════════════════════════
-# SCOUTING REPORT GENERATOR
-# ═════════════════════════════════════════════════════════════════════════════
-
-SECTION_METRICS = {
-    "GK": {
-        "Räddning":   [("Räddn. %",  "gkSavePct",  100, False),
-                       ("Nollor %",  "gkCSPct",    100, False),
-                       ("Räddningar","gkSaves",    200, False)],
-        "Mål emot":   [("IM/90",     "gkGA90",      3,  True ),
-                       ("SoT emot",  "gkSoTA",     200, True )],
-        "Spelartid":  [("Minuter",   "min",       2700, False),
-                       ("Matcher",   "mp",           30, False)],
-    },
-    "DF": {
-        "Försvar":    [("Bryt./90",  "intPer90",    4, False),
-                       ("Tackl./90", "tklWPer90",   4, False),
-                       ("Krossn.",   "crs",         80, False)],
-        "Anfall":     [("Mål/90",    "glsPer90",  0.5, False),
-                       ("Assist/90", "astPer90",  0.4, False),
-                       ("xA/90",     "xApx",      0.4, False)],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-    "MF": {
-        "Anfall":     [("Mål/90",    "glsPer90",  1.0, False),
-                       ("Assist/90", "astPer90",  0.6, False),
-                       ("xG/90",     "xGpx",      1.0, False),
-                       ("xA/90",     "xApx",      0.5, False)],
-        "Passning":   [("Skott/90",  "shPer90",   4.0, False),
-                       ("SoT%",      "sotPct",     70, False),
-                       ("xP/90",     "xPpx",       15, False)],
-        "Försvar":    [("Bryt./90",  "intPer90",   4, False),
-                       ("Tackl./90", "tklWPer90",  4, False),
-                       ("Frispk/90", "fldPer90",   4, False)],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-    "FW": {
-        "Målscoring": [("Mål/90",    "glsPer90",  1.5, False),
-                       ("xG/90",     "xGpx",      1.5, False),
-                       ("Mål vs xG", "gMinusXG",   5, False),
-                       ("Skott/90",  "shPer90",    6, False)],
-        "Kvalitet":   [("SoT%",      "sotPct",     70, False),
-                       ("Mål/Skott", "gPerSh",    0.3, False),
-                       ("xA/90",     "xApx",      0.5, False)],
-        "Rörelse":    [("Assist/90", "astPer90",  0.6, False),
-                       ("Frispk/90", "fldPer90",   4, False),
-                       ("Offside",   "off",        20, True )],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-}
-
-SECTION_COLORS = {
-    "Målscoring": "#e05050", "Anfall":  "#e05050",
-    "Försvar":    "#30c060", "Räddning":"#3a80ff",
-    "Passning":   "#f0a030", "Mål emot":"#a050e0",
-    "Kvalitet":   "#00e8c8", "Rörelse": "#f0a030",
-    "Spelartid":  "#7090b0", "Disciplin":"#d09030",
-    "Resultat":   "#7080ff",
-}
-
-def _pv(v, mx, inv=False, pct_d=None, key=None):
-    if pct_d and key and key in pct_d: return int(pct_d[key])
-    p = min(round((f(v) / max(mx, 0.001)) * 100), 100)
-    return max(0, 100 - p if inv else p)
-
-def _grade(score):
-    if score >= 80: return "A"
-    if score >= 65: return "B"
-    if score >= 50: return "C"
-    if score >= 35: return "D"
-    return "F"
-
-def _grade_color(grade):
-    return {"A":"#00e8c8","B":"#30c060","C":"#f0a030","D":"#d04040","F":"#a02020"}.get(grade,"#888")
-
-def _radar_labels_for_pos(pg):
-    """Get radar labels and pct values for a player and its avg."""
-    return DEFAULT_RADAR.get(pg, DEFAULT_RADAR["U"])
-
-def generate_scouting_report(p, season):
-    """Generate a scouting report image. Returns BytesIO PNG."""
-    pg    = pos_group(p.get("pos",""))
-    pct_d = p.get("pct", {})
-    avg_d = league_avg(season, pg)
-    secs  = SECTION_METRICS.get(pg, SECTION_METRICS["MF"])
-
-    # ── Calculate section scores
-    section_scores = {}
-    for sec_name, metrics in secs.items():
-        vals = [_pv(p.get(k,0), mx, inv, pct_d, k) for _,k,mx,inv in metrics]
-        section_scores[sec_name] = round(sum(vals)/len(vals)) if vals else 0
-    overall = round(sum(section_scores.values()) / len(section_scores))
-    grade   = _grade(overall)
-
-    # ── Radar data
-    radar_mets  = _radar_labels_for_pos(pg)
-    radar_lbls  = radar_mets
-    n_ax        = len(radar_lbls)
-    angles      = np.linspace(0, 2*np.pi, n_ax, endpoint=False).tolist()
-    angles_closed = angles + [angles[0]]
-
-    def get_pcts(src_dict, is_avg=False):
-        vals = []
-        for m in radar_lbls:
-            key, mx, inv = ALL_RADAR[m]
-            v = f(src_dict.get(key, 0))
-            vals.append(_pv(v, mx, inv) if is_avg else _pv(v, mx, inv, pct_d, key))
-        return vals + [vals[0]]
-
-    player_pcts = get_pcts(p)
-    avg_pcts    = get_pcts(avg_d, is_avg=True) if avg_d else [0]*(n_ax+1)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # FIGURE
-    # ──────────────────────────────────────────────────────────────────────────
-    BG   = "#0d0d0d"
-    CARD = "#161616"
-    fig  = plt.figure(figsize=(20, 10), facecolor=BG)
-    fig.patch.set_facecolor(BG)
-
-    # Title
-    title_name = p.get("name","")
-    fig.text(0.5, 0.96, f"SCOUTING REPORT: {title_name.upper()}",
-             ha="center", va="top", color="white",
-             fontsize=24, fontweight="bold")
-    fig.text(0.5, 0.91,
-             f"{p.get('squad','')}  ·  {p.get('pos','')}  ·  {p.get('age','')} ÅR  ·  Allsvenskan {season}",
-             ha="center", va="top", color="#8090a0", fontsize=12)
-
-    # ── LEFT panel: Horizontal bar chart (section scores)
-    ax_bar = fig.add_axes([0.03, 0.10, 0.28, 0.76])
-    ax_bar.set_facecolor(CARD)
-    for spine in ax_bar.spines.values(): spine.set_visible(False)
-
-    sec_names  = list(section_scores.keys())
-    sec_vals   = [section_scores[s] for s in sec_names]
-    sec_colors = [SECTION_COLORS.get(s,"#4a6080") for s in sec_names]
-    y_pos      = np.arange(len(sec_names))
-
-    bars = ax_bar.barh(y_pos, sec_vals, color=sec_colors, height=0.55,
-                       edgecolor="none", zorder=3)
-    ax_bar.set_xlim(0, 110)
-    ax_bar.set_yticks(y_pos)
-    ax_bar.set_yticklabels(sec_names, color="white", fontsize=13, fontweight="bold")
-    ax_bar.set_xticks([0, 25, 50, 75, 100])
-    ax_bar.tick_params(colors="#4a6080", labelsize=10)
-    ax_bar.xaxis.tick_bottom()
-    ax_bar.set_xlim(0, 115)
-    ax_bar.grid(axis="x", color="#2a2a2a", linewidth=0.8, zorder=0)
-
-    # Value labels
-    for bar, val in zip(bars, sec_vals):
-        ax_bar.text(val + 2, bar.get_y() + bar.get_height()/2,
-                    f"{val}", va="center", ha="left",
-                    color="white", fontsize=13, fontweight="bold")
-
-    ax_bar.set_title("Sektionspoäng", color="white", fontsize=13,
-                     fontweight="bold", pad=10)
-
-    # ── MIDDLE panel: Player info + grade
-    ax_mid = fig.add_axes([0.34, 0.10, 0.28, 0.76])
-    ax_mid.set_facecolor(CARD)
-    ax_mid.axis("off")
-
-    info_lines = [
-        ("Namn:",    p.get("name","")),
-        ("Lag:",     p.get("squad","")),
-        ("Position:",p.get("pos","")),
-        ("Ålder:",   f"{p.get('age','')} år"),
-        ("Nation:",  p.get("nation","")),
-        ("Säsong:",  season),
-        ("Minuter:", f"{int(p.get('min',0)):,}".replace(",",".")),
-    ]
-    # Add xG if available
-    if p.get("xGpx",0) > 0:
-        info_lines.append(("xG/90:", f"{p.get('xGpx',0):.2f}"))
-    if p.get("xApx",0) > 0:
-        info_lines.append(("xA/90:", f"{p.get('xApx',0):.2f}"))
-    if p.get("xPpx",0) > 0:
-        info_lines.append(("xP/90:", f"{p.get('xPpx',0):.2f}"))
-
-    y_start = 0.88
-    ax_mid.text(0.5, 0.96, "Spelarinformation",
-                ha="center", va="top", transform=ax_mid.transAxes,
-                color="white", fontsize=13, fontweight="bold")
-    for label, value in info_lines:
-        ax_mid.text(0.1, y_start, label, transform=ax_mid.transAxes,
-                    color="#8090a0", fontsize=12, va="top")
-        ax_mid.text(0.52, y_start, value, transform=ax_mid.transAxes,
-                    color="white", fontsize=12, va="top", fontweight="bold")
-        y_start -= 0.09
-
-    # Grade badge
-    gc = _grade_color(grade)
-    grade_box = FancyBboxPatch((0.15, 0.04), 0.70, 0.20,
-                                boxstyle="round,pad=0.02",
-                                facecolor=gc+"22", edgecolor=gc,
-                                linewidth=2, transform=ax_mid.transAxes)
-    ax_mid.add_patch(grade_box)
-    ax_mid.text(0.5, 0.14, f"Betyg:  {grade}",
-                ha="center", va="center", transform=ax_mid.transAxes,
-                color=gc, fontsize=22, fontweight="bold")
-    ax_mid.text(0.5, 0.07, f"Overall: {overall}/100",
-                ha="center", va="center", transform=ax_mid.transAxes,
-                color="#8090a0", fontsize=11)
-
-    # ── RIGHT panel: Radar
-    ax_rad = fig.add_axes([0.64, 0.07, 0.34, 0.82], polar=True)
-    ax_rad.set_facecolor("#0a0f1a")
-
-    # Gridlines
-    for level in [25, 50, 75, 100]:
-        ax_rad.plot(angles_closed, [level]*(n_ax+1),
-                    color="#1a2540", lw=0.7, zorder=1)
-
-    # Avg fill
-    ax_rad.fill(angles, avg_pcts[:-1], color="#606060", alpha=0.15, zorder=2)
-    ax_rad.plot(angles_closed, avg_pcts, color="#e05050", lw=1.5,
-                linestyle="--", zorder=3, label="Ligasnitt")
-
-    # Player fill
-    ax_rad.fill(angles, player_pcts[:-1], color="#30a060", alpha=0.30, zorder=4)
-    ax_rad.plot(angles_closed, player_pcts, color="#30ff80", lw=2.5,
-                zorder=5, label=title_name)
-
-    # Dots
-    ax_rad.scatter(angles, player_pcts[:-1], color="#30ff80", s=40, zorder=6)
-
-    ax_rad.set_xticks(angles)
-    ax_rad.set_xticklabels(radar_lbls, color="white", fontsize=10.5,
-                            fontweight="bold")
-    ax_rad.set_ylim(0, 100)
-    ax_rad.set_yticks([25, 50, 75, 100])
-    ax_rad.set_yticklabels(["25","50","75","100"], color="#4a5568", fontsize=8)
-    ax_rad.tick_params(colors="#4a5568")
-    ax_rad.spines["polar"].set_color("#1a2540")
-    ax_rad.grid(color="#1a2540", lw=0.5)
-    ax_rad.set_title("Spelare vs Ligasnitt (percentil)",
-                     color="white", fontsize=12, fontweight="bold", pad=18)
-
-    # Legend
-    handles = [
-        mpatches.Patch(facecolor="#30ff80", alpha=0.6, label=title_name),
-        mpatches.Patch(facecolor="#e05050", alpha=0.5, label="Ligasnitt"),
-    ]
-    ax_rad.legend(handles=handles, loc="lower center",
-                  bbox_to_anchor=(0.5, -0.12), ncol=2,
-                  facecolor="#161616", edgecolor="#1a2540",
-                  labelcolor="white", fontsize=10)
-
-    # Footer
-    fig.text(0.98, 0.01, "Allsvenskan Analytics · FBRef data",
-             ha="right", va="bottom", color="#2a3a50", fontsize=9)
-
-    plt.tight_layout(rect=[0, 0.02, 1, 0.90])
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
-                facecolor=BG, edgecolor="none")
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
