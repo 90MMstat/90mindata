@@ -69,7 +69,14 @@ def load_data():
         st.stop()
 
 DB = load_data()
-SEASONS_AVAIL = sorted([y for y in DB["seasons"] if DB["seasons"][y].get("players")], reverse=True)
+# Seasons with player data OR match log files
+import os as _os
+SEASONS_AVAIL = sorted(
+    [y for y in DB["seasons"] if DB["seasons"][y].get("players")] +
+    [y for y in ["2024","2023","2022","2001"] 
+     if y not in DB["seasons"] and _os.path.exists(f"match_data_{y}.json")],
+    reverse=True
+)
 
 def f(v): return v if isinstance(v,(int,float)) and not math.isnan(v) else 0
 
@@ -415,328 +422,6 @@ def radar_config(key, pg="MF"):
     )
     return chosen, show_avg
 
-# ═════════════════════════════════════════════════════════════════════════════
-# SCOUTING REPORT GENERATOR
-# ═════════════════════════════════════════════════════════════════════════════
-
-SECTION_METRICS = {
-    "GK": {
-        "Räddning":   [("Räddn. %",  "gkSavePct",  100, False),
-                       ("Nollor %",  "gkCSPct",    100, False),
-                       ("Räddningar","gkSaves",    200, False)],
-        "Mål emot":   [("IM/90",     "gkGA90",      3,  True ),
-                       ("SoT emot",  "gkSoTA",     200, True )],
-        "Spelartid":  [("Minuter",   "min",       2700, False),
-                       ("Matcher",   "mp",           30, False)],
-    },
-    "DF": {
-        "Försvar":    [("Bryt./90",  "intPer90",    4, False),
-                       ("Tackl./90", "tklWPer90",   4, False),
-                       ("Krossn.",   "crs",         80, False)],
-        "Anfall":     [("Mål/90",    "glsPer90",  0.5, False),
-                       ("Assist/90", "astPer90",  0.4, False),
-                       ("xA/90",     "xApx",      0.4, False)],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-    "MF": {
-        "Anfall":     [("Mål/90",    "glsPer90",  1.0, False),
-                       ("Assist/90", "astPer90",  0.6, False),
-                       ("xG/90",     "xGpx",      1.0, False),
-                       ("xA/90",     "xApx",      0.5, False)],
-        "Passning":   [("Skott/90",  "shPer90",   4.0, False),
-                       ("SoT%",      "sotPct",     70, False),
-                       ("xP/90",     "xPpx",       15, False)],
-        "Försvar":    [("Bryt./90",  "intPer90",   4, False),
-                       ("Tackl./90", "tklWPer90",  4, False),
-                       ("Frispk/90", "fldPer90",   4, False)],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-    "FW": {
-        "Målscoring": [("Mål/90",    "glsPer90",  1.5, False),
-                       ("xG/90",     "xGpx",      1.5, False),
-                       ("Mål vs xG", "gMinusXG",   5, False),
-                       ("Skott/90",  "shPer90",    6, False)],
-        "Kvalitet":   [("SoT%",      "sotPct",     70, False),
-                       ("Mål/Skott", "gPerSh",    0.3, False),
-                       ("xA/90",     "xApx",      0.5, False)],
-        "Rörelse":    [("Assist/90", "astPer90",  0.6, False),
-                       ("Frispk/90", "fldPer90",   4, False),
-                       ("Offside",   "off",        20, True )],
-        "Disciplin":  [("Gula kort", "crdY",       12, True ),
-                       ("Felspel/90","flsPer90",    3, True )],
-    },
-}
-
-SECTION_COLORS = {
-    "Målscoring": "#e05050", "Anfall":  "#e05050",
-    "Försvar":    "#30c060", "Räddning":"#3a80ff",
-    "Passning":   "#f0a030", "Mål emot":"#a050e0",
-    "Kvalitet":   "#00e8c8", "Rörelse": "#f0a030",
-    "Spelartid":  "#7090b0", "Disciplin":"#d09030",
-    "Resultat":   "#7080ff",
-}
-
-def _pv(v, mx, inv=False, pct_d=None, key=None):
-    if pct_d and key and key in pct_d: return int(pct_d[key])
-    p = min(round((f(v) / max(mx, 0.001)) * 100), 100)
-    return max(0, 100 - p if inv else p)
-
-def _grade(score):
-    if score >= 80: return "A"
-    if score >= 65: return "B"
-    if score >= 50: return "C"
-    if score >= 35: return "D"
-    return "F"
-
-def _grade_color(grade):
-    return {"A":"#00e8c8","B":"#30c060","C":"#f0a030","D":"#d04040","F":"#a02020"}.get(grade,"#888")
-
-def _radar_labels_for_pos(pg):
-    """Get radar labels and pct values for a player and its avg."""
-    return DEFAULT_RADAR.get(pg, DEFAULT_RADAR["U"])
-
-def generate_scouting_report(p, season):
-    """Generate a scouting report image. Returns BytesIO PNG."""
-    pg    = pos_group(p.get("pos",""))
-    pct_d = p.get("pct", {})
-    avg_d = league_avg(season, pg)
-    secs  = SECTION_METRICS.get(pg, SECTION_METRICS["MF"])
-
-    # ── Calculate section scores
-    section_scores = {}
-    for sec_name, metrics in secs.items():
-        vals = [_pv(p.get(k,0), mx, inv, pct_d, k) for _,k,mx,inv in metrics]
-        section_scores[sec_name] = round(sum(vals)/len(vals)) if vals else 0
-    overall = round(sum(section_scores.values()) / len(section_scores))
-    grade   = _grade(overall)
-
-    # ── Radar data
-    radar_mets  = _radar_labels_for_pos(pg)
-    radar_lbls  = radar_mets
-    n_ax        = len(radar_lbls)
-    angles      = np.linspace(0, 2*np.pi, n_ax, endpoint=False).tolist()
-    angles_closed = angles + [angles[0]]
-
-    def get_pcts(src_dict, is_avg=False):
-        vals = []
-        for m in radar_lbls:
-            key, mx, inv = ALL_RADAR[m]
-            v = f(src_dict.get(key, 0))
-            vals.append(_pv(v, mx, inv) if is_avg else _pv(v, mx, inv, pct_d, key))
-        return vals + [vals[0]]
-
-    player_pcts = get_pcts(p)
-    avg_pcts    = get_pcts(avg_d, is_avg=True) if avg_d else [0]*(n_ax+1)
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # FIGURE
-    # ──────────────────────────────────────────────────────────────────────────
-    BG   = "#0d0d0d"
-    CARD = "#161616"
-    fig  = plt.figure(figsize=(20, 10), facecolor=BG)
-    fig.patch.set_facecolor(BG)
-
-    # Title
-    title_name = p.get("name","")
-    fig.text(0.5, 0.96, f"SCOUTING REPORT: {title_name.upper()}",
-             ha="center", va="top", color="white",
-             fontsize=24, fontweight="bold")
-    fig.text(0.5, 0.91,
-             f"{p.get('squad','')}  ·  {p.get('pos','')}  ·  {p.get('age','')} ÅR  ·  Allsvenskan {season}",
-             ha="center", va="top", color="#8090a0", fontsize=12)
-
-    # ── LEFT panel: Horizontal bar chart (section scores)
-    ax_bar = fig.add_axes([0.03, 0.10, 0.28, 0.76])
-    ax_bar.set_facecolor(CARD)
-    for spine in ax_bar.spines.values(): spine.set_visible(False)
-
-    sec_names  = list(section_scores.keys())
-    sec_vals   = [section_scores[s] for s in sec_names]
-    sec_colors = [SECTION_COLORS.get(s,"#4a6080") for s in sec_names]
-    y_pos      = np.arange(len(sec_names))
-
-    bars = ax_bar.barh(y_pos, sec_vals, color=sec_colors, height=0.55,
-                       edgecolor="none", zorder=3)
-    ax_bar.set_xlim(0, 110)
-    ax_bar.set_yticks(y_pos)
-    ax_bar.set_yticklabels(sec_names, color="white", fontsize=13, fontweight="bold")
-    ax_bar.set_xticks([0, 25, 50, 75, 100])
-    ax_bar.tick_params(colors="#4a6080", labelsize=10)
-    ax_bar.xaxis.tick_bottom()
-    ax_bar.set_xlim(0, 115)
-    ax_bar.grid(axis="x", color="#2a2a2a", linewidth=0.8, zorder=0)
-
-    # Value labels
-    for bar, val in zip(bars, sec_vals):
-        ax_bar.text(val + 2, bar.get_y() + bar.get_height()/2,
-                    f"{val}", va="center", ha="left",
-                    color="white", fontsize=13, fontweight="bold")
-
-    ax_bar.set_title("Sektionspoäng", color="white", fontsize=13,
-                     fontweight="bold", pad=10)
-
-    # ── MIDDLE panel: Player info + grade
-    ax_mid = fig.add_axes([0.34, 0.10, 0.28, 0.76])
-    ax_mid.set_facecolor(CARD)
-    ax_mid.axis("off")
-
-    info_lines = [
-        ("Namn:",    p.get("name","")),
-        ("Lag:",     p.get("squad","")),
-        ("Position:",p.get("pos","")),
-        ("Ålder:",   f"{p.get('age','')} år"),
-        ("Nation:",  p.get("nation","")),
-        ("Säsong:",  season),
-        ("Minuter:", f"{int(p.get('min',0)):,}".replace(",",".")),
-    ]
-    # Add xG if available
-    if p.get("xGpx",0) > 0:
-        info_lines.append(("xG/90:", f"{p.get('xGpx',0):.2f}"))
-    if p.get("xApx",0) > 0:
-        info_lines.append(("xA/90:", f"{p.get('xApx',0):.2f}"))
-    if p.get("xPpx",0) > 0:
-        info_lines.append(("xP/90:", f"{p.get('xPpx',0):.2f}"))
-
-    y_start = 0.88
-    ax_mid.text(0.5, 0.96, "Spelarinformation",
-                ha="center", va="top", transform=ax_mid.transAxes,
-                color="white", fontsize=13, fontweight="bold")
-    for label, value in info_lines:
-        ax_mid.text(0.1, y_start, label, transform=ax_mid.transAxes,
-                    color="#8090a0", fontsize=12, va="top")
-        ax_mid.text(0.52, y_start, value, transform=ax_mid.transAxes,
-                    color="white", fontsize=12, va="top", fontweight="bold")
-        y_start -= 0.09
-
-    # Grade badge
-    gc = _grade_color(grade)
-    grade_box = FancyBboxPatch((0.15, 0.04), 0.70, 0.20,
-                                boxstyle="round,pad=0.02",
-                                facecolor=gc+"22", edgecolor=gc,
-                                linewidth=2, transform=ax_mid.transAxes)
-    ax_mid.add_patch(grade_box)
-    ax_mid.text(0.5, 0.14, f"Betyg:  {grade}",
-                ha="center", va="center", transform=ax_mid.transAxes,
-                color=gc, fontsize=22, fontweight="bold")
-    ax_mid.text(0.5, 0.07, f"Overall: {overall}/100",
-                ha="center", va="center", transform=ax_mid.transAxes,
-                color="#8090a0", fontsize=11)
-
-    # ── RIGHT panel: Radar
-    ax_rad = fig.add_axes([0.64, 0.07, 0.34, 0.82], polar=True)
-    ax_rad.set_facecolor("#0a0f1a")
-
-    # Gridlines
-    for level in [25, 50, 75, 100]:
-        ax_rad.plot(angles_closed, [level]*(n_ax+1),
-                    color="#1a2540", lw=0.7, zorder=1)
-
-    # Avg fill
-    ax_rad.fill(angles, avg_pcts[:-1], color="#606060", alpha=0.15, zorder=2)
-    ax_rad.plot(angles_closed, avg_pcts, color="#e05050", lw=1.5,
-                linestyle="--", zorder=3, label="Ligasnitt")
-
-    # Player fill
-    ax_rad.fill(angles, player_pcts[:-1], color="#30a060", alpha=0.30, zorder=4)
-    ax_rad.plot(angles_closed, player_pcts, color="#30ff80", lw=2.5,
-                zorder=5, label=title_name)
-
-    # Dots
-    ax_rad.scatter(angles, player_pcts[:-1], color="#30ff80", s=40, zorder=6)
-
-    ax_rad.set_xticks(angles)
-    ax_rad.set_xticklabels(radar_lbls, color="white", fontsize=10.5,
-                            fontweight="bold")
-    ax_rad.set_ylim(0, 100)
-    ax_rad.set_yticks([25, 50, 75, 100])
-    ax_rad.set_yticklabels(["25","50","75","100"], color="#4a5568", fontsize=8)
-    ax_rad.tick_params(colors="#4a5568")
-    ax_rad.spines["polar"].set_color("#1a2540")
-    ax_rad.grid(color="#1a2540", lw=0.5)
-    ax_rad.set_title("Spelare vs Ligasnitt (percentil)",
-                     color="white", fontsize=12, fontweight="bold", pad=18)
-
-    # Legend
-    handles = [
-        mpatches.Patch(facecolor="#30ff80", alpha=0.6, label=title_name),
-        mpatches.Patch(facecolor="#e05050", alpha=0.5, label="Ligasnitt"),
-    ]
-    ax_rad.legend(handles=handles, loc="lower center",
-                  bbox_to_anchor=(0.5, -0.12), ncol=2,
-                  facecolor="#161616", edgecolor="#1a2540",
-                  labelcolor="white", fontsize=10)
-
-    # Footer
-    fig.text(0.98, 0.01, "Allsvenskan Analytics · FBRef data",
-             ha="right", va="bottom", color="#2a3a50", fontsize=9)
-
-    plt.tight_layout(rect=[0, 0.02, 1, 0.90])
-
-    buf = io.BytesIO()
-    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
-                facecolor=BG, edgecolor="none")
-    plt.close(fig)
-    buf.seek(0)
-    return buf
-
-
-
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown("""<div style='display:flex;align-items:center;gap:10px;
-         padding:0 0 16px;border-bottom:1px solid #1a2540;margin-bottom:16px;'>
-        <div style='width:36px;height:36px;border-radius:8px;
-             background:linear-gradient(135deg,#003399,#1a5fcc);
-             display:flex;align-items:center;justify-content:center;'>
-            <span style='color:white;font-size:18px;'>⚽</span></div>
-        <div><div style='color:#e2e8f0;font-weight:700;font-size:14px;'>Allsvenskan</div>
-             <div style='color:#4a6080;font-size:10px;'>Analytics · FBRef</div></div></div>
-    """, unsafe_allow_html=True)
-
-    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg"],
-                    label_visibility="collapsed")
-    st.divider()
-    st.markdown("**Säsong**")
-    season = st.selectbox("Säsong", SEASONS_AVAIL, label_visibility="collapsed")
-    df_all = players_df(season)
-
-    st.markdown("**Position**")
-    pos_filter = st.selectbox("Position",
-        ["Alla","GK – Målvakter","DF – Försvarare","MF – Mittfältare","FW – Anfallare"],
-        label_visibility="collapsed")
-    pos_sel = {"Alla":"ALL","GK – Målvakter":"GK","DF – Försvarare":"DF",
-               "MF – Mittfältare":"MF","FW – Anfallare":"FW"}[pos_filter]
-
-    st.markdown("**Lag**")
-    all_teams = sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
-    team_opts = ["Alla lag"] + (["IFK Göteborg"] if "IFK Göteborg" in all_teams else [])
-    team_opts += [t for t in all_teams if t not in ("IFK Göteborg","Alla lag")]
-    team_filter = st.selectbox("Lag", team_opts, label_visibility="collapsed")
-    team_sel = None if team_filter == "Alla lag" else team_filter
-
-    st.markdown("**Sök**")
-    search = st.text_input("", placeholder="Spelarnamn…", label_visibility="collapsed")
-
-    st.divider()
-    if not df_all.empty:
-        st.caption(f"📊 {len(df_all)} spelare · {season}")
-        ifk_n = len(df_all[df_all.squad=="IFK Göteborg"])
-        st.caption(f"🔵 {ifk_n} IFK Göteborg")
-        xg_n = df_all["xGpx"].apply(f).gt(0).sum() if "xGpx" in df_all else 0
-        if xg_n: st.caption(f"📈 {int(xg_n)} med xG-data")
-
-def filt(df):
-    out = df.copy()
-    if pos_sel != "ALL":   out = out[out.pos_group == pos_sel]
-    if team_sel:           out = out[out.squad == team_sel]
-    if search:             out = out[out.name.str.contains(search, case=False, na=False)]
-    return out
-
-df_filt = filt(df_all) if not df_all.empty else pd.DataFrame()
-
-# ══ VIEW: IFK Göteborg ════════════════════════════════════════════════════════
 if "IFK Göteborg" in view:
     st.markdown(f"# 🔵 IFK Göteborg — {season}")
     ifk = df_all[df_all.squad=="IFK Göteborg"].copy() if not df_all.empty else pd.DataFrame()
@@ -1396,6 +1081,7 @@ elif "Säsongsöversikt" in view:
         with open(match_file, encoding='utf-8') as mf:
             matches = json.load(mf)
 
+    # df_all may be empty for seasons with only match data (e.g. 2024 before player files added)
     ifk_all = df_all[df_all.squad == "IFK Göteborg"].copy() if not df_all.empty else pd.DataFrame()
     sq_df   = squads_df(season)
     ifk_sq  = sq_df[sq_df.squad == "IFK Göteborg"].iloc[0].to_dict()               if not sq_df.empty and "IFK Göteborg" in sq_df.squad.values else {}
@@ -1820,3 +1506,587 @@ elif "Nästa Steg" in view:
                 if fig_ns:
                     st.plotly_chart(fig_ns, use_container_width=True, config={"displayModeBar":False})
             scout_panel(p_ns, season)
+# ══ VIEW: FORMTABELL ═════════════════════════════════════════════════════════
+elif "Formtabell" in view:
+    st.markdown(f"# 📋 Formtabell — Allsvenskan {season}")
+    st.caption("Baserat på matchloggar för IFK Göteborg")
+
+    import os as _os2, glob as _glob2
+    match_files = sorted(_glob2.glob("match_data_*.json"), reverse=True)
+    if not match_files:
+        st.warning("Inga matchloggfiler hittades. Lägg till match_data_YYYY.json i mappen.")
+        st.stop()
+
+    n_form = st.radio("Visa senaste", [5, 10, 15, "Alla"],
+                      horizontal=True, label_visibility="collapsed", key="form_n")
+
+    all_seasons_data = {}
+    for mf in match_files:
+        yr = mf.replace("match_data_","").replace(".json","")
+        with open(mf, encoding="utf-8") as f_mf:
+            matches = json.load(f_mf)
+        if n_form != "Alla":
+            matches = matches[-int(n_form):]
+        all_seasons_data[yr] = matches
+
+    # ── Form per season
+    for yr in sorted(all_seasons_data.keys(), reverse=True):
+        matches = all_seasons_data[yr]
+        if not matches: continue
+
+        w = sum(1 for m in matches if m["result"]=="W")
+        d_ = sum(1 for m in matches if m["result"]=="D")
+        l = sum(1 for m in matches if m["result"]=="L")
+        pts = w*3+d_
+        gf = sum(m["gf"] for m in matches)
+        ga = sum(m["ga"] for m in matches)
+
+        form_icons = {"W":"🟢","D":"🟡","L":"🔴"}
+        form_str = " ".join(form_icons.get(m["result"],"⚪") for m in matches)
+
+        st.markdown(f"### {yr}")
+        st.markdown(f"""
+<div style='background:#0a1525;border:1px solid #1a3050;border-radius:10px;
+     padding:16px 20px;margin-bottom:16px;'>
+  <div style='font-size:20px;letter-spacing:4px;margin-bottom:12px;'>{form_str}</div>
+  <div style='display:flex;gap:24px;flex-wrap:wrap;'>
+    <div><span style='color:#4a6080;font-size:11px;'>VINSTER</span>
+         <div style='color:#30c060;font-size:22px;font-weight:800;'>{w}</div></div>
+    <div><span style='color:#4a6080;font-size:11px;'>OAVGJORT</span>
+         <div style='color:#f0a030;font-size:22px;font-weight:800;'>{d_}</div></div>
+    <div><span style='color:#4a6080;font-size:11px;'>FÖRLUSTER</span>
+         <div style='color:#e05050;font-size:22px;font-weight:800;'>{l}</div></div>
+    <div><span style='color:#4a6080;font-size:11px;'>POÄNG</span>
+         <div style='color:#3a80ff;font-size:22px;font-weight:800;'>{pts}</div></div>
+    <div><span style='color:#4a6080;font-size:11px;'>MÅL</span>
+         <div style='color:#e2e8f0;font-size:22px;font-weight:800;'>{gf}–{ga}</div></div>
+    <div><span style='color:#4a6080;font-size:11px;'>POÄNG/MATCH</span>
+         <div style='color:#e2e8f0;font-size:22px;font-weight:800;'>{pts/max(len(matches),1):.2f}</div></div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+        # Match-för-match rad
+        cols = st.columns(len(matches))
+        for col_el, m in zip(cols, matches):
+            res_col = {"W":"#30c060","D":"#f0a030","L":"#e05050"}.get(m["result"],"#5070a0")
+            score = f"{m['gf']}–{m['ga']}"
+            opp = m["opponent"][:8]
+            hb = "H" if m["venue"]=="Home" else "B"
+            col_el.markdown(f"""
+<div style='background:#0d1829;border-top:3px solid {res_col};border-radius:0 0 6px 6px;
+     padding:6px 4px;text-align:center;'>
+  <div style='font-size:10px;color:#3a5070;'>{hb}</div>
+  <div style='font-size:9px;color:#7090b0;'>{opp}</div>
+  <div style='font-size:13px;font-weight:800;color:#e2e8f0;'>{score}</div>
+  <div style='font-size:9px;color:{res_col};font-weight:700;'>{m["result"]}</div>
+</div>""", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        # Skott & possession chart
+        with st.expander(f"📊 Detaljstatistik {yr}"):
+            sh_data = [m.get("sh",0) or 0 for m in matches]
+            sot_data = [m.get("sot",0) or 0 for m in matches]
+            poss_data = [m.get("poss",0) or 0 for m in matches]
+            labels_f = [f"O{m['round']} {m['opponent'][:8]}" for m in matches]
+            res_colors_f = [{"W":"#30c060","D":"#f0a030","L":"#e05050"}.get(m["result"],"#5070a0")
+                           for m in matches]
+
+            fig_form = go.Figure()
+            fig_form.add_trace(go.Bar(
+                x=labels_f, y=sh_data, name="Skott",
+                marker=dict(color=res_colors_f, line_width=0),
+                hovertemplate="%{x}<br>Skott: %{y}<extra></extra>",
+            ))
+            fig_form.add_trace(go.Scatter(
+                x=labels_f, y=poss_data, name="Bollinnehav %",
+                mode="lines+markers", yaxis="y2",
+                line=dict(color="#3a80ff", width=2),
+                marker=dict(size=6),
+                hovertemplate="%{x}<br>Boll: %{y:.0f}%<extra></extra>",
+            ))
+            fig_form.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="#7090b0", size=10),
+                xaxis=dict(gridcolor="#1a2540", tickangle=-45,
+                           tickfont=dict(color="#5070a0",size=9)),
+                yaxis=dict(gridcolor="#1a2540", title="Skott"),
+                yaxis2=dict(overlaying="y", side="right",
+                            title="Boll %", range=[20,80],
+                            tickfont=dict(color="#3a80ff")),
+                legend=dict(font=dict(color="#a0c0e0"), bgcolor="rgba(0,0,0,0)"),
+                margin=dict(l=0,r=40,t=10,b=60), height=280,
+            )
+            st.plotly_chart(fig_form, use_container_width=True, config={"displayModeBar":False})
+
+
+# ══ VIEW: ÅLDER & PRESTANDA ═══════════════════════════════════════════════════
+elif "Ålder" in view:
+    st.markdown(f"# 🔵 Ålder & Prestanda — Allsvenskan {season}")
+    st.caption("Bubbelstorlek = spelade minuter · IFK Göteborg markerade i blått")
+
+    if df_all.empty:
+        st.warning("Ingen data.")
+        st.stop()
+
+    # Controls
+    ca, cb, cc, cd = st.columns(4)
+    with ca:
+        y_metric = st.selectbox("Y-axel (prestanda)", [
+            "glsPer90","astPer90","xGpx","xApx","xPpx",
+            "shPer90","sotPct","intPer90","tklWPer90","gPerSh",
+        ], format_func=lambda x: {
+            "glsPer90":"Mål/90","astPer90":"Assist/90",
+            "xGpx":"xG/90","xApx":"xA/90","xPpx":"xP/90",
+            "shPer90":"Skott/90","sotPct":"SoT%",
+            "intPer90":"Brytningar/90","tklWPer90":"Tacklingar/90",
+            "gPerSh":"Mål/Skott",
+        }.get(x,x), label_visibility="collapsed", key="scatter_y")
+    with cb:
+        pos_sc = st.selectbox("Position", ["Alla","GK","DF","MF","FW"],
+                               label_visibility="collapsed", key="scatter_pos")
+    with cc:
+        min_min_sc = st.slider("Min minuter", 100, 1500, 400, key="scatter_min")
+    with cd:
+        show_labels = st.checkbox("Visa namn (IFK)", value=True, key="scatter_labels")
+
+    # Filter
+    df_sc = df_all[df_all["min"].apply(f) >= min_min_sc].copy()
+    if pos_sc != "Alla":
+        df_sc = df_sc[df_sc.pos_group == pos_sc]
+    df_sc = df_sc[df_sc["age"].apply(f) > 0]
+
+    if df_sc.empty:
+        st.info("Inga spelare matchade filtret.")
+        st.stop()
+
+    # Build scatter
+    is_ifk   = df_sc["squad"] == "IFK Göteborg"
+    ages     = df_sc["age"].apply(f).tolist()
+    y_vals   = df_sc[y_metric].apply(f).tolist() if y_metric in df_sc.columns else [0]*len(df_sc)
+    sizes    = [max(f(m)/50, 5) for m in df_sc["min"].tolist()]
+    colors   = ["#3a80ff" if i else "#1a2540" for i in is_ifk]
+    borders  = ["#60c0ff" if i else "#2a3a50" for i in is_ifk]
+    names    = df_sc["name"].tolist()
+    squads   = df_sc["squad"].tolist()
+    mins     = df_sc["min"].apply(f).tolist()
+
+    y_label = {
+        "glsPer90":"Mål/90","astPer90":"Assist/90",
+        "xGpx":"xG/90","xApx":"xA/90","xPpx":"xP/90",
+        "shPer90":"Skott/90","sotPct":"SoT%",
+        "intPer90":"Brytningar/90","tklWPer90":"Tacklingar/90",
+        "gPerSh":"Mål/Skott",
+    }.get(y_metric, y_metric)
+
+    fig_sc = go.Figure()
+
+    # Non-IFK first (background)
+    idx_other = [i for i,v in enumerate(is_ifk) if not v]
+    idx_ifk   = [i for i,v in enumerate(is_ifk) if v]
+
+    fig_sc.add_trace(go.Scatter(
+        x=[ages[i] for i in idx_other],
+        y=[y_vals[i] for i in idx_other],
+        mode="markers",
+        name="Övriga lag",
+        marker=dict(
+            size=[sizes[i] for i in idx_other],
+            color="#1a2f50", line=dict(color="#2a4060", width=0.5),
+            opacity=0.6,
+        ),
+        text=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_other],
+        hovertemplate="<b>%{text}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
+    ))
+
+    # IFK on top
+    fig_sc.add_trace(go.Scatter(
+        x=[ages[i] for i in idx_ifk],
+        y=[y_vals[i] for i in idx_ifk],
+        mode="markers+text" if show_labels else "markers",
+        name="IFK Göteborg",
+        marker=dict(
+            size=[sizes[i] for i in idx_ifk],
+            color="#3a80ff",
+            line=dict(color="#60c0ff", width=1.5),
+            opacity=0.9,
+        ),
+        text=[names[i].split()[-1] for i in idx_ifk] if show_labels else None,
+        textposition="top center",
+        textfont=dict(color="#a0c8ff", size=10),
+        customtext=[f"{names[i]}<br>{squads[i]}<br>{int(mins[i])} min" for i in idx_ifk],
+        hovertemplate="<b>%{customtext}</b><br>Ålder: %{x}<br>" + y_label + ": %{y:.2f}<extra></extra>",
+    ))
+
+    # Liga-snitt linje
+    if y_vals:
+        avg_y = sum(y_vals) / len(y_vals)
+        fig_sc.add_hline(
+            y=avg_y,
+            line=dict(color="#3a5070", dash="dot", width=1),
+            annotation_text=f"Snitt: {avg_y:.2f}",
+            annotation_font=dict(color="#4a6080", size=10),
+        )
+
+    fig_sc.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#7090b0", size=11),
+        xaxis=dict(
+            title="Ålder", gridcolor="#1a2540",
+            tickfont=dict(color="#5070a0"),
+            titlefont=dict(color="#5070a0"),
+        ),
+        yaxis=dict(
+            title=y_label, gridcolor="#1a2540",
+            tickfont=dict(color="#5070a0"),
+            titlefont=dict(color="#5070a0"),
+        ),
+        legend=dict(font=dict(color="#a0c0e0"), bgcolor="rgba(0,0,0,0)",
+                    orientation="h", y=-0.12, x=0.5, xanchor="center"),
+        margin=dict(l=20,r=20,t=20,b=60),
+        height=560,
+        hovermode="closest",
+    )
+    st.plotly_chart(fig_sc, use_container_width=True, config={"displayModeBar":False})
+
+    # Top performers table
+    st.divider()
+    st.markdown("### Topprestörer i vald statistik")
+    top_sc = df_sc.sort_values(y_metric, ascending=False).head(15) if y_metric in df_sc.columns else df_sc.head(15)
+    disp_cols = ["name","squad","pos","age","min",y_metric]
+    avail_disp = [c for c in disp_cols if c in top_sc.columns]
+    ren_disp = {"name":"Spelare","squad":"Lag","pos":"Pos","age":"Ålder",
+                "min":"Min",y_metric:y_label}
+    tbl_disp = top_sc[avail_disp].rename(columns=ren_disp).reset_index(drop=True)
+    if "Min" in tbl_disp:
+        tbl_disp["Min"] = tbl_disp["Min"].apply(lambda v: str(int(f(v))).replace(",",".") if v else "—")
+    if y_label in tbl_disp:
+        tbl_disp[y_label] = tbl_disp[y_label].apply(lambda v: f"{f(v):.2f}" if v else "—")
+    st.dataframe(tbl_disp, use_container_width=True, hide_index=True, height=420)
+
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SCOUTING REPORT GENERATOR
+# ═════════════════════════════════════════════════════════════════════════════
+
+SECTION_METRICS = {
+    "GK": {
+        "Räddning":   [("Räddn. %",  "gkSavePct",  100, False),
+                       ("Nollor %",  "gkCSPct",    100, False),
+                       ("Räddningar","gkSaves",    200, False)],
+        "Mål emot":   [("IM/90",     "gkGA90",      3,  True ),
+                       ("SoT emot",  "gkSoTA",     200, True )],
+        "Spelartid":  [("Minuter",   "min",       2700, False),
+                       ("Matcher",   "mp",           30, False)],
+    },
+    "DF": {
+        "Försvar":    [("Bryt./90",  "intPer90",    4, False),
+                       ("Tackl./90", "tklWPer90",   4, False),
+                       ("Krossn.",   "crs",         80, False)],
+        "Anfall":     [("Mål/90",    "glsPer90",  0.5, False),
+                       ("Assist/90", "astPer90",  0.4, False),
+                       ("xA/90",     "xApx",      0.4, False)],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+    "MF": {
+        "Anfall":     [("Mål/90",    "glsPer90",  1.0, False),
+                       ("Assist/90", "astPer90",  0.6, False),
+                       ("xG/90",     "xGpx",      1.0, False),
+                       ("xA/90",     "xApx",      0.5, False)],
+        "Passning":   [("Skott/90",  "shPer90",   4.0, False),
+                       ("SoT%",      "sotPct",     70, False),
+                       ("xP/90",     "xPpx",       15, False)],
+        "Försvar":    [("Bryt./90",  "intPer90",   4, False),
+                       ("Tackl./90", "tklWPer90",  4, False),
+                       ("Frispk/90", "fldPer90",   4, False)],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+    "FW": {
+        "Målscoring": [("Mål/90",    "glsPer90",  1.5, False),
+                       ("xG/90",     "xGpx",      1.5, False),
+                       ("Mål vs xG", "gMinusXG",   5, False),
+                       ("Skott/90",  "shPer90",    6, False)],
+        "Kvalitet":   [("SoT%",      "sotPct",     70, False),
+                       ("Mål/Skott", "gPerSh",    0.3, False),
+                       ("xA/90",     "xApx",      0.5, False)],
+        "Rörelse":    [("Assist/90", "astPer90",  0.6, False),
+                       ("Frispk/90", "fldPer90",   4, False),
+                       ("Offside",   "off",        20, True )],
+        "Disciplin":  [("Gula kort", "crdY",       12, True ),
+                       ("Felspel/90","flsPer90",    3, True )],
+    },
+}
+
+SECTION_COLORS = {
+    "Målscoring": "#e05050", "Anfall":  "#e05050",
+    "Försvar":    "#30c060", "Räddning":"#3a80ff",
+    "Passning":   "#f0a030", "Mål emot":"#a050e0",
+    "Kvalitet":   "#00e8c8", "Rörelse": "#f0a030",
+    "Spelartid":  "#7090b0", "Disciplin":"#d09030",
+    "Resultat":   "#7080ff",
+}
+
+def _pv(v, mx, inv=False, pct_d=None, key=None):
+    if pct_d and key and key in pct_d: return int(pct_d[key])
+    p = min(round((f(v) / max(mx, 0.001)) * 100), 100)
+    return max(0, 100 - p if inv else p)
+
+def _grade(score):
+    if score >= 80: return "A"
+    if score >= 65: return "B"
+    if score >= 50: return "C"
+    if score >= 35: return "D"
+    return "F"
+
+def _grade_color(grade):
+    return {"A":"#00e8c8","B":"#30c060","C":"#f0a030","D":"#d04040","F":"#a02020"}.get(grade,"#888")
+
+def _radar_labels_for_pos(pg):
+    """Get radar labels and pct values for a player and its avg."""
+    return DEFAULT_RADAR.get(pg, DEFAULT_RADAR["U"])
+
+def generate_scouting_report(p, season):
+    """Generate a scouting report image. Returns BytesIO PNG."""
+    pg    = pos_group(p.get("pos",""))
+    pct_d = p.get("pct", {})
+    avg_d = league_avg(season, pg)
+    secs  = SECTION_METRICS.get(pg, SECTION_METRICS["MF"])
+
+    # ── Calculate section scores
+    section_scores = {}
+    for sec_name, metrics in secs.items():
+        vals = [_pv(p.get(k,0), mx, inv, pct_d, k) for _,k,mx,inv in metrics]
+        section_scores[sec_name] = round(sum(vals)/len(vals)) if vals else 0
+    overall = round(sum(section_scores.values()) / len(section_scores))
+    grade   = _grade(overall)
+
+    # ── Radar data
+    radar_mets  = _radar_labels_for_pos(pg)
+    radar_lbls  = radar_mets
+    n_ax        = len(radar_lbls)
+    angles      = np.linspace(0, 2*np.pi, n_ax, endpoint=False).tolist()
+    angles_closed = angles + [angles[0]]
+
+    def get_pcts(src_dict, is_avg=False):
+        vals = []
+        for m in radar_lbls:
+            key, mx, inv = ALL_RADAR[m]
+            v = f(src_dict.get(key, 0))
+            vals.append(_pv(v, mx, inv) if is_avg else _pv(v, mx, inv, pct_d, key))
+        return vals + [vals[0]]
+
+    player_pcts = get_pcts(p)
+    avg_pcts    = get_pcts(avg_d, is_avg=True) if avg_d else [0]*(n_ax+1)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # FIGURE
+    # ──────────────────────────────────────────────────────────────────────────
+    BG   = "#0d0d0d"
+    CARD = "#161616"
+    matplotlib.rcParams['font.family'] = 'DejaVu Sans'
+    fig  = plt.figure(figsize=(20, 10), facecolor=BG)
+    fig.patch.set_facecolor(BG)
+
+    # Title
+    title_name = p.get("name","")
+    fig.text(0.5, 0.96, f"SCOUTING REPORT: {title_name.upper()}",
+             ha="center", va="top", color="white",
+             fontsize=24, fontweight="bold")
+    fig.text(0.5, 0.91,
+             f"{p.get('squad','')}  ·  {p.get('pos','')}  ·  {p.get('age','')} ÅR  ·  Allsvenskan {season}",
+             ha="center", va="top", color="#8090a0", fontsize=12)
+
+    # ── LEFT panel: Horizontal bar chart (section scores)
+    ax_bar = fig.add_axes([0.03, 0.10, 0.28, 0.76])
+    ax_bar.set_facecolor(CARD)
+    for spine in ax_bar.spines.values(): spine.set_visible(False)
+
+    sec_names  = list(section_scores.keys())
+    sec_vals   = [section_scores[s] for s in sec_names]
+    sec_colors = [SECTION_COLORS.get(s,"#4a6080") for s in sec_names]
+    y_pos      = np.arange(len(sec_names))
+
+    bars = ax_bar.barh(y_pos, sec_vals, color=sec_colors, height=0.55,
+                       edgecolor="none", zorder=3)
+    ax_bar.set_xlim(0, 110)
+    ax_bar.set_yticks(y_pos)
+    ax_bar.set_yticklabels(sec_names, color="white", fontsize=13, fontweight="bold")
+    ax_bar.set_xticks([0, 25, 50, 75, 100])
+    ax_bar.tick_params(colors="#4a6080", labelsize=10)
+    ax_bar.xaxis.tick_bottom()
+    ax_bar.set_xlim(0, 115)
+    ax_bar.grid(axis="x", color="#2a2a2a", linewidth=0.8, zorder=0)
+
+    # Value labels
+    for bar, val in zip(bars, sec_vals):
+        ax_bar.text(val + 2, bar.get_y() + bar.get_height()/2,
+                    f"{val}", va="center", ha="left",
+                    color="white", fontsize=13, fontweight="bold")
+
+    ax_bar.set_title("Sektionspoäng", color="white", fontsize=13,
+                     fontweight="bold", pad=10)
+
+    # ── MIDDLE panel: Player info + grade
+    ax_mid = fig.add_axes([0.34, 0.10, 0.28, 0.76])
+    ax_mid.set_facecolor(CARD)
+    ax_mid.axis("off")
+
+    info_lines = [
+        ("Namn:",    p.get("name","")),
+        ("Lag:",     p.get("squad","")),
+        ("Position:",p.get("pos","")),
+        ("Ålder:",   f"{p.get('age','')} år"),
+        ("Nation:",  p.get("nation","")),
+        ("Säsong:",  season),
+        ("Minuter:", f"{int(p.get('min',0)):,}".replace(",",".")),
+    ]
+    # Add xG if available
+    if p.get("xGpx",0) > 0:
+        info_lines.append(("xG/90:", f"{p.get('xGpx',0):.2f}"))
+    if p.get("xApx",0) > 0:
+        info_lines.append(("xA/90:", f"{p.get('xApx',0):.2f}"))
+    if p.get("xPpx",0) > 0:
+        info_lines.append(("xP/90:", f"{p.get('xPpx',0):.2f}"))
+
+    y_start = 0.88
+    ax_mid.text(0.5, 0.96, "Spelarinformation",
+                ha="center", va="top", transform=ax_mid.transAxes,
+                color="white", fontsize=13, fontweight="bold")
+    for label, value in info_lines:
+        ax_mid.text(0.1, y_start, label, transform=ax_mid.transAxes,
+                    color="#8090a0", fontsize=12, va="top")
+        ax_mid.text(0.52, y_start, value, transform=ax_mid.transAxes,
+                    color="white", fontsize=12, va="top", fontweight="bold")
+        y_start -= 0.09
+
+    # Grade badge
+    gc = _grade_color(grade)
+    grade_box = FancyBboxPatch((0.15, 0.04), 0.70, 0.20,
+                                boxstyle="round,pad=0.02",
+                                facecolor=gc+"22", edgecolor=gc,
+                                linewidth=2, transform=ax_mid.transAxes)
+    ax_mid.add_patch(grade_box)
+    ax_mid.text(0.5, 0.14, f"Betyg:  {grade}",
+                ha="center", va="center", transform=ax_mid.transAxes,
+                color=gc, fontsize=22, fontweight="bold")
+    ax_mid.text(0.5, 0.07, f"Overall: {overall}/100",
+                ha="center", va="center", transform=ax_mid.transAxes,
+                color="#8090a0", fontsize=11)
+
+    # ── RIGHT panel: Radar
+    ax_rad = fig.add_axes([0.64, 0.07, 0.34, 0.82], polar=True)
+    ax_rad.set_facecolor("#0a0f1a")
+
+    # Gridlines
+    for level in [25, 50, 75, 100]:
+        ax_rad.plot(angles_closed, [level]*(n_ax+1),
+                    color="#1a2540", lw=0.7, zorder=1)
+
+    # Avg fill
+    ax_rad.fill(angles, avg_pcts[:-1], color="#606060", alpha=0.15, zorder=2)
+    ax_rad.plot(angles_closed, avg_pcts, color="#e05050", lw=1.5,
+                linestyle="--", zorder=3, label="Ligasnitt")
+
+    # Player fill
+    ax_rad.fill(angles, player_pcts[:-1], color="#30a060", alpha=0.30, zorder=4)
+    ax_rad.plot(angles_closed, player_pcts, color="#30ff80", lw=2.5,
+                zorder=5, label=title_name)
+
+    # Dots
+    ax_rad.scatter(angles, player_pcts[:-1], color="#30ff80", s=40, zorder=6)
+
+    ax_rad.set_xticks(angles)
+    ax_rad.set_xticklabels(radar_lbls, color="white", fontsize=10.5,
+                            fontweight="bold")
+    ax_rad.set_ylim(0, 100)
+    ax_rad.set_yticks([25, 50, 75, 100])
+    ax_rad.set_yticklabels(["25","50","75","100"], color="#4a5568", fontsize=8)
+    ax_rad.tick_params(colors="#4a5568")
+    ax_rad.spines["polar"].set_color("#1a2540")
+    ax_rad.grid(color="#1a2540", lw=0.5)
+    ax_rad.set_title("Spelare vs Ligasnitt (percentil)",
+                     color="white", fontsize=12, fontweight="bold", pad=18)
+
+    # Legend
+    handles = [
+        mpatches.Patch(facecolor="#30ff80", alpha=0.6, label=title_name),
+        mpatches.Patch(facecolor="#e05050", alpha=0.5, label="Ligasnitt"),
+    ]
+    ax_rad.legend(handles=handles, loc="lower center",
+                  bbox_to_anchor=(0.5, -0.12), ncol=2,
+                  facecolor="#161616", edgecolor="#1a2540",
+                  labelcolor="white", fontsize=10)
+
+    # Footer
+    fig.text(0.98, 0.01, "Allsvenskan Analytics · FBRef data",
+             ha="right", va="bottom", color="#2a3a50", fontsize=9)
+
+    plt.tight_layout(rect=[0, 0.02, 1, 0.90])
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="png", dpi=150, bbox_inches="tight",
+                facecolor=BG, edgecolor="none")
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
+
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("""<div style='display:flex;align-items:center;gap:10px;
+         padding:0 0 16px;border-bottom:1px solid #1a2540;margin-bottom:16px;'>
+        <div style='width:36px;height:36px;border-radius:8px;
+             background:linear-gradient(135deg,#003399,#1a5fcc);
+             display:flex;align-items:center;justify-content:center;'>
+            <span style='color:white;font-size:18px;'>⚽</span></div>
+        <div><div style='color:#e2e8f0;font-weight:700;font-size:14px;'>Allsvenskan</div>
+             <div style='color:#4a6080;font-size:10px;'>Analytics · FBRef</div></div></div>
+    """, unsafe_allow_html=True)
+
+    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg","📋 Formtabell","🔵 Ålder & Prestanda"],
+                    label_visibility="collapsed")
+    st.divider()
+    st.markdown("**Säsong**")
+    season = st.selectbox("Säsong", SEASONS_AVAIL, label_visibility="collapsed")
+    df_all = players_df(season)
+
+    st.markdown("**Position**")
+    pos_filter = st.selectbox("Position",
+        ["Alla","GK – Målvakter","DF – Försvarare","MF – Mittfältare","FW – Anfallare"],
+        label_visibility="collapsed")
+    pos_sel = {"Alla":"ALL","GK – Målvakter":"GK","DF – Försvarare":"DF",
+               "MF – Mittfältare":"MF","FW – Anfallare":"FW"}[pos_filter]
+
+    st.markdown("**Lag**")
+    all_teams = sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
+    team_opts = ["Alla lag"] + (["IFK Göteborg"] if "IFK Göteborg" in all_teams else [])
+    team_opts += [t for t in all_teams if t not in ("IFK Göteborg","Alla lag")]
+    team_filter = st.selectbox("Lag", team_opts, label_visibility="collapsed")
+    team_sel = None if team_filter == "Alla lag" else team_filter
+
+    st.markdown("**Sök**")
+    search = st.text_input("", placeholder="Spelarnamn…", label_visibility="collapsed")
+
+    st.divider()
+    if not df_all.empty:
+        st.caption(f"📊 {len(df_all)} spelare · {season}")
+        ifk_n = len(df_all[df_all.squad=="IFK Göteborg"])
+        st.caption(f"🔵 {ifk_n} IFK Göteborg")
+        xg_n = df_all["xGpx"].apply(f).gt(0).sum() if "xGpx" in df_all else 0
+        if xg_n: st.caption(f"📈 {int(xg_n)} med xG-data")
+
+def filt(df):
+    out = df.copy()
+    if pos_sel != "ALL":   out = out[out.pos_group == pos_sel]
+    if team_sel:           out = out[out.squad == team_sel]
+    if search:             out = out[out.name.str.contains(search, case=False, na=False)]
+    return out
+
+df_filt = filt(df_all) if not df_all.empty else pd.DataFrame()
+
+# ══ VIEW: IFK Göteborg ════════════════════════════════════════════════════════
+
