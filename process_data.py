@@ -516,6 +516,90 @@ def process_competition(comp_dir, year, competition="allsvenskan"):
 
 YEAR_DIRS = ["2001","2022","2023","2024","2025","2026"]
 
+# ── Extra statistik (passningar, löpningar etc.) ──────────────────────────────
+
+def _dedupe_extra(raw):
+    """Same deduplication as _dedupe_name but standalone."""
+    if not raw: return ""
+    s = str(raw).strip()
+    n = len(s)
+    if n < 3: return s
+    for split in range(max(2,n//4), min(n-1,3*n//4+1)):
+        first, second = s[:split], s[split:]
+        if _norm(first) == _norm(second): return first.strip()
+        if len(_norm(first))>=4 and _norm(second).startswith(_norm(first)[:len(_norm(first))//2+2]) and first[0]==second[0]:
+            return first.strip()
+    return s
+
+def _extra_abbrev_key(name):
+    s = _norm(_dedupe_extra(name))
+    parts = s.strip().split()
+    if not parts: return None
+    return (parts[0].rstrip(".")[0], parts[-1])
+
+def safe_f(v):
+    if v is None or (isinstance(v, str) and v.strip() == ""): return None
+    try: return float(str(v).replace(",","."))
+    except: return None
+
+def parse_extra_file(path):
+    """Parse Passning_YYYY.xlsx or similar multi-sheet file.
+    Returns: (player_stats_dict, domare_list)
+    """
+    if not path or not os.path.exists(path): return {}, []
+    try:
+        wb = openpyxl.load_workbook(path, data_only=True)
+    except Exception as e:
+        print(f"    ⚠ Extra-fil fel: {e}"); return {}, []
+
+    SHEET_COLS = {
+        "PASSNINGAR & PASSNINGSPROCENT": {"pass_total":5,"pass_complete":6,"pass_pct":7},
+        "Framåtpassningar":              {"fwd_pass":5,"fwd_pass_comp":6,"fwd_pass_pct":7},
+        "Huvudspel & luftdueller":       {"headers_won":5,"headers_pct":6,"np_duels":7,"np_duels_pct":8},
+        "Progressiva passningar":        {"prog_pass":5,"prog_pass_pct":6,"prog_pass_p90":7},
+        "ACC. & PROGRESSIVA LÖPNINGAR  i":{"acc_carries":5,"prog_carries":6,"acc_p90":7,"prog_carries_p90":8},
+        "Återerövringar":                {"recoveries":5,"recoveries_p90":6},
+        "Lång passningar & genomskärare":{"long_pass":5,"through_balls":6,"long_through_p90":7},
+    }
+    player_data = {}
+    domare_list = []
+
+    for sname, col_map in SHEET_COLS.items():
+        if sname not in wb.sheetnames: continue
+        ws = wb[sname]
+        for row in list(ws.iter_rows(values_only=True))[1:]:
+            raw = row[1] if len(row) > 1 else row[0]
+            if not raw: continue
+            name = _dedupe_extra(str(raw))
+            key  = _extra_abbrev_key(name)
+            if not key: continue
+            if key not in player_data: player_data[key] = {"_abbrev": name}
+            for stat_key, col_idx in col_map.items():
+                v = safe_f(row[col_idx]) if col_idx < len(row) else None
+                if v is not None: player_data[key][stat_key] = v
+
+    # Domare sheet
+    if "Domare" in wb.sheetnames:
+        ws = wb["Domare"]
+        for row in list(ws.iter_rows(values_only=True))[1:]:
+            raw = row[1] if len(row) > 1 else None
+            if not raw: continue
+            name = _dedupe_extra(str(raw))
+            if not name: continue
+            domare_list.append({
+                "name":      name,
+                "matches":   safe_f(row[2]),
+                "fouls_pm":  safe_f(row[3]),
+                "yk_pm":     safe_f(row[4]),
+                "rk_pm":     safe_f(row[5]),
+                "pen":       safe_f(row[6]),
+                "pen_pm":    safe_f(row[7]),
+            })
+
+    print(f"      → Extra stats: {len(player_data)} spelare, {len(domare_list)} domare")
+    return player_data, domare_list
+
+
 # ── Nationalitetsfiler ────────────────────────────────────────────────────────
 def parse_nationality_file(path):
     """Parse FBRef Allsvenskan Nationalities xlsx.
@@ -679,11 +763,29 @@ if __name__ == "__main__":
         if nationalities:
             print(f"    ✓ Nationaliteter: {len(nationalities)} länder")
 
+        # ── Extra statistik-fil (passningar, löpningar etc.)
+        extra_path = find_file(DATA_ROOT, [
+            f"Passning_{year}.xlsx",
+            f"*Passning*{year}*",
+            f"*{year}*Passning*",
+            f"*extra*{year}*",
+        ])
+        extra_players, domare = {}, []
+        if extra_path:
+            extra_players, domare = parse_extra_file(extra_path)
+            # Merge extra stats into player objects
+            for p in all_players:
+                key = _extra_abbrev_key(p.get("name",""))
+                if key and key in extra_players:
+                    extras = {k:v for k,v in extra_players[key].items() if not k.startswith("_")}
+                    p.update(extras)
+
         output["seasons"][year] = {
             "players":         all_players,
             "squads":          all_squads,
             "league_averages": league_avgs,
             "nationalities":   nationalities,
+            "domare":          domare,
         }
 
     with open(OUT, "w", encoding="utf-8") as f:
