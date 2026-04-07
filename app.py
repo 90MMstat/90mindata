@@ -757,7 +757,7 @@ with st.sidebar:
              <div style='color:#4a6080;font-size:10px;'>Analytics</div></div></div>
     """, unsafe_allow_html=True)
 
-    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg","📋 Formtabell","👨‍⚖️ Domare","🏟️ Laganalys"],
+    view = st.radio("", ["⊞ IFK Göteborg","☰ Alla spelare","⇄ Jämför spelare","◫ Lagöversikt","🌍 Nationaliteter","🔍 Transferscout","📈 Spelarutveckling","📅 Säsongsöversikt","⭐ Nästa Steg","📋 Formtabell","👨‍⚖️ Domare"],
                     label_visibility="collapsed", key="main_view")
     st.divider()
     st.markdown("**Säsong**")
@@ -2204,7 +2204,15 @@ elif "Domare" in view:
 
     domare = domare_data(season)
     if not domare:
-        st.info("Ingen domardata för denna säsong. Lägg till Passning_YYYY.xlsx i 90minutersdata/ och kör process_data.py.")
+        # Försök med senaste tillgängliga säsong med domardata
+        for fallback_yr in sorted(SEASONS_AVAIL, reverse=True):
+            fb_dom = domare_data(fallback_yr)
+            if fb_dom:
+                domare = fb_dom
+                st.info(f"Visar domardata från {fallback_yr} (ingen data för {season}).")
+                break
+    if not domare:
+        st.info("Ingen domardata tillgänglig. Lägg till Passning_YYYY.xlsx eller Statistik_YYYY.xlsx i Player/YEAR/ och kör process_data.py.")
         st.stop()
 
     # Sort options
