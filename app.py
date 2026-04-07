@@ -1026,63 +1026,216 @@ elif "Jämför" in view:
 # ══ VIEW: LAGÖVERSIKT ════════════════════════════════════════════════════════
 elif "Lagöversikt" in view:
     st.markdown(f"# ◫ Lagöversikt — {season}")
+
     sq_df = squads_df(season)
     if sq_df.empty:
         st.warning("Ingen lagdata.")
     else:
-        sq_df = sq_df.sort_values("gls",ascending=False).reset_index(drop=True)
-        disp=["squad","mp","gls","ast","sh","sot","sotPct","poss","crdY","crdR"]
-        avail=[c for c in disp if c in sq_df.columns]
-        ren={"squad":"Lag","mp":"M","gls":"Mål","ast":"Ass","sh":"Skott",
-             "sot":"SoT","sotPct":"SoT%","poss":"Boll%","crdY":"GK","crdR":"RK"}
-        tbl=sq_df[avail].rename(columns=ren)
-        if "SoT%" in tbl: tbl["SoT%"]=tbl["SoT%"].apply(lambda v:f"{v:.1f}%" if v else "—")
-        if "Boll%" in tbl: tbl["Boll%"]=tbl["Boll%"].apply(lambda v:f"{v:.1f}%" if v else "—")
-        st.dataframe(tbl, use_container_width=True, height=520, hide_index=True)
+        sq_df = sq_df.sort_values("gls", ascending=False).reset_index(drop=True)
+        disp  = ["squad","mp","gls","ast","sh","sot","sotPct","poss","crdY","crdR"]
+        avail = [c for c in disp if c in sq_df.columns]
+        ren   = {"squad":"Lag","mp":"M","gls":"Mål","ast":"Ass","sh":"Skott",
+                 "sot":"SoT","sotPct":"SoT%","poss":"Boll%","crdY":"GK","crdR":"RK"}
+        tbl   = sq_df[avail].rename(columns=ren)
+        if "SoT%" in tbl: tbl["SoT%"] = tbl["SoT%"].apply(lambda v: f"{f(v):.1f}%")
+        if "Boll%" in tbl: tbl["Boll%"] = tbl["Boll%"].apply(lambda v: f"{f(v):.0f}%")
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.markdown("### Detaljerad laganalys")
+
+    all_squads_list = sq_df["squad"].tolist() if not sq_df.empty else (
+        sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
+    )
+    if not all_squads_list:
+        st.stop()
+
+    ifk_first = ["IFK Göteborg"] + [t for t in all_squads_list if t != "IFK Göteborg"]
+    col_sel, col_pos = st.columns([2, 1])
+    with col_sel:
+        chosen_team = st.selectbox("", ifk_first,
+            label_visibility="collapsed", key="lo_team")
+    with col_pos:
+        pos_lo = st.radio("", ["Alla","GK","DF","MF","FW"],
+            horizontal=True, label_visibility="collapsed", key="lo_pos")
+
+    is_ifk     = chosen_team == "IFK Göteborg"
+    team_color = "#3a80ff" if is_ifk else "#a0c0e0"
+    st.markdown(f"## {'🔵 ' if is_ifk else ''}{chosen_team} — {season}")
+
+    team_ps = df_all[df_all.squad == chosen_team].copy() if not df_all.empty else pd.DataFrame()
+    team_sq = sq_df[sq_df.squad == chosen_team].iloc[0].to_dict() \
+              if not sq_df.empty and chosen_team in sq_df.squad.values else {}
+
+    if team_ps.empty:
+        st.info("Ingen spelardata för detta lag.")
+    else:
+        c1,c2,c3,c4,c5,c6,c7,c8 = st.columns(8)
+        c1.metric("⚽ Mål",        int(team_ps.gls.sum())    if "gls"  in team_ps else 0)
+        c2.metric("🎯 Assist",     int(team_ps.ast.sum())    if "ast"  in team_ps else 0)
+        c3.metric("👟 Skott",      int(team_ps.sh.sum())     if "sh"   in team_ps else 0)
+        c4.metric("🎳 SoT",        int(team_ps.sot.sum())    if "sot"  in team_ps else 0)
+        c5.metric("📊 SoT%",       f"{team_sq.get('sotPct',0):.1f}%" if team_sq else "—")
+        c6.metric("🔵 Bollinneh.", f"{team_sq.get('poss',0):.0f}%"   if team_sq else "—")
+        c7.metric("🛡 Brytningar", int(team_ps["int"].sum()) if "int"  in team_ps else 0)
+        c8.metric("🟨 Gula kort",  int(team_ps.crdY.sum())   if "crdY" in team_ps else 0)
         st.divider()
 
-        metric = st.selectbox("Visualisera",
-            ["gls","ast","sh","sot","sotPct","poss","crdY"],
-            format_func=lambda x:{"gls":"Mål","ast":"Assist","sh":"Skott","sot":"SoT",
-                "sotPct":"SoT%","poss":"Boll%","crdY":"Gula kort"}.get(x,x),
-            label_visibility="collapsed")
-        if metric in sq_df.columns:
-            sq_s = sq_df.sort_values(metric,ascending=True)
-            colors = ["#3a80ff" if t=="IFK Göteborg" else "#1a3050" for t in sq_s["squad"]]
-            fig = go.Figure(go.Bar(
-                x=sq_s[metric], y=sq_s["squad"], orientation="h",
-                marker=dict(color=colors,line_width=0),
-            ))
-            fig.update_layout(
+        st.markdown("### Topplistor")
+        ta,tb,tc,td = st.columns(4)
+        def top5_lo(col, icon, unit):
+            sub = team_ps[team_ps[col]>0].sort_values(col,ascending=False).head(5) \
+                  if col in team_ps else pd.DataFrame()
+            for _,r in sub.iterrows():
+                v = int(r[col]) if f(r[col])==int(f(r[col])) else round(f(r[col]),2)
+                st.markdown(f"{icon} **{r['name'].split()[-1]}** — {v} {unit}")
+        with ta:
+            st.markdown("**Mål**"); top5_lo("gls","⚽","mål")
+        with tb:
+            st.markdown("**Assist**"); top5_lo("ast","🎯","ast")
+        with tc:
+            st.markdown("**Spelade minuter**")
+            sub = team_ps.sort_values("min",ascending=False).head(5) if "min" in team_ps else pd.DataFrame()
+            for _,r in sub.iterrows():
+                st.markdown(f"⏱ **{r['name'].split()[-1]}** — {int(r['min']):,}".replace(",",".")+" min")
+        with td:
+            st.markdown("**Flest skott**"); top5_lo("sh","👟","skott")
+
+        st.divider()
+        st.markdown("### Spelarbidrag")
+        has_xg_lo   = team_ps["xGpx"].apply(f).gt(0).any()      if "xGpx"      in team_ps.columns else False
+        has_pass_lo = team_ps["pass_total"].apply(f).gt(0).any() if "pass_total" in team_ps.columns else False
+        has_rec_lo  = team_ps["recoveries"].apply(f).gt(0).any() if "recoveries" in team_ps.columns else False
+
+        def hbar_lo(df_b, traces, barmode="stack", height=None):
+            fig_h = go.Figure()
+            for nm, col, color in traces:
+                if col in df_b.columns:
+                    fig_h.add_trace(go.Bar(name=nm, y=df_b.name,
+                        x=df_b[col].apply(f), orientation="h",
+                        marker_color=color, marker_line_width=0))
+            fig_h.update_layout(barmode=barmode,
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(color="#7090b0",size=11),
                 xaxis=dict(gridcolor="#1a2540"),
-                yaxis=dict(tickfont=dict(color="#a0c0e0",size=11)),
+                yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
+                legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
                 margin=dict(l=0,r=20,t=10,b=20),
-                height=max(400,len(sq_df)*28),
-            )
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar":False})
+                height=height or max(320,len(df_b)*30))
+            st.plotly_chart(fig_h, use_container_width=True, config={"displayModeBar":False})
+
+        tab_names_lo = ["⚽ Mål & Assist","👟 Skott & SoT","🛡 Försvar"]
+        if has_xg_lo:   tab_names_lo.append("📈 Expected Goals")
+        if has_pass_lo: tab_names_lo.append("🎯 Passningar")
+        if has_rec_lo:  tab_names_lo.append("🏃 Löpningar")
+        tabs_lo = st.tabs(tab_names_lo)
+        ti = 0
+
+        with tabs_lo[ti]:
+            ti += 1
+            top_c = team_ps[team_ps.gPluA>0].sort_values("gPluA",ascending=True).tail(16) \
+                    if "gPluA" in team_ps.columns else pd.DataFrame()
+            if not top_c.empty:
+                hbar_lo(top_c,[("Mål","gls",team_color),("Assist","ast","#00e8c8")])
+        with tabs_lo[ti]:
+            ti += 1
+            top_sh = team_ps[team_ps.sh>0].sort_values("sh",ascending=True).tail(16) \
+                     if "sh" in team_ps.columns else pd.DataFrame()
+            if not top_sh.empty:
+                hbar_lo(top_sh,[("Skott","sh","#f0a030"),("SoT","sot","#30c060")],barmode="group")
+        with tabs_lo[ti]:
+            ti += 1
+            if "int" in team_ps.columns:
+                td2 = team_ps.copy()
+                td2["def_total"] = td2["int"].apply(f)+td2["tklW"].apply(f)
+                td2 = td2[td2.def_total>0].sort_values("def_total",ascending=True).tail(16)
+                if not td2.empty:
+                    hbar_lo(td2,[("Brytningar","int","#30c060"),("Tacklingar","tklW","#a050e0")])
+        if has_xg_lo:
+            with tabs_lo[ti]:
+                ti += 1
+                top_xg = team_ps[team_ps["xGpx"].apply(f)>0].sort_values(
+                    "xGpx",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                if not top_xg.empty:
+                    hbar_lo(top_xg,[("xG","xG","#20c060"),("xA","xA","#3a80ff"),("xP","xP","#a050e0")],barmode="group")
+                st.markdown("#### xG vs faktiska mål")
+                top_cmp = team_ps[team_ps["xG"].apply(f)>0].sort_values("xG",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                if not top_cmp.empty:
+                    fig_cmp = go.Figure()
+                    fig_cmp.add_trace(go.Bar(name="xG",y=top_cmp.name,x=top_cmp["xG"].apply(f),
+                        orientation="h",marker_color="#20c06099",marker_line_width=0))
+                    fig_cmp.add_trace(go.Bar(name="Faktiska mål",y=top_cmp.name,x=top_cmp["gls"].apply(f),
+                        orientation="h",marker_color=team_color,marker_line_width=0))
+                    fig_cmp.update_layout(barmode="overlay",paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
+                        xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
+                        legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
+                        margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_cmp)*30))
+                    st.plotly_chart(fig_cmp,use_container_width=True,config={"displayModeBar":False})
+        if has_pass_lo:
+            with tabs_lo[ti]:
+                ti += 1
+                cp1,cp2 = st.columns(2)
+                with cp1:
+                    st.markdown("**Passningsprocent**")
+                    tp = team_ps[team_ps["pass_pct"].apply(f)>0].sort_values("pass_pct",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                    if not tp.empty: hbar_lo(tp,[("P%","pass_pct","#3a80ff")])
+                with cp2:
+                    st.markdown("**Progressiva pass/90**")
+                    tp2 = team_ps[team_ps["prog_pass_p90"].apply(f)>0].sort_values("prog_pass_p90",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                    if not tp2.empty: hbar_lo(tp2,[("PP/90","prog_pass_p90","#a050e0")])
+        if has_rec_lo:
+            with tabs_lo[ti]:
+                ti += 1
+                cr1,cr2 = st.columns(2)
+                with cr1:
+                    st.markdown("**Återerövringar/90**")
+                    tr = team_ps[team_ps["recoveries_p90"].apply(f)>0].sort_values("recoveries_p90",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                    if not tr.empty: hbar_lo(tr,[("Åter./90","recoveries_p90","#00e8c8")])
+                with cr2:
+                    st.markdown("**Prog. löpningar/90**")
+                    tr2 = team_ps[team_ps["prog_carries_p90"].apply(f)>0].sort_values("prog_carries_p90",ascending=True,key=lambda x:x.apply(f)).tail(16)
+                    if not tr2.empty: hbar_lo(tr2,[("PL/90","prog_carries_p90","#f0a030")])
+
         st.divider()
+        st.markdown("### Spelartabell")
+        base_c = ["name","pos","age","mp","min","gls","ast","sh","sot","sotPct","int","tklW","crdY"]
+        xg_c   = ["xG","xGpx","xA","xApx","xP","xPpx"] if has_xg_lo else []
+        pa_c   = ["pass_pct","prog_pass_p90","recoveries_p90"] if has_pass_lo else []
+        sc_cols = [c for c in base_c+xg_c+pa_c if c in team_ps.columns]
+        rn_map  = {"name":"Spelare","pos":"Pos","age":"Ålder","mp":"M","min":"Min",
+                   "gls":"Mål","ast":"Ast","sh":"Skott","sot":"SoT","sotPct":"SoT%",
+                   "int":"Bryt","tklW":"Tackl","crdY":"GK",
+                   "xG":"xG","xGpx":"xG/90","xA":"xA","xApx":"xA/90","xP":"xP","xPpx":"xP/90",
+                   "pass_pct":"P%","prog_pass_p90":"PP/90","recoveries_p90":"Åter/90"}
+        tbl_lo = team_ps.sort_values("min",ascending=False)[sc_cols].rename(columns=rn_map).reset_index(drop=True)
+        if "Min"  in tbl_lo.columns: tbl_lo["Min"]  = tbl_lo["Min"].apply(lambda v: str(int(f(v))) if v else "—")
+        if "SoT%" in tbl_lo.columns: tbl_lo["SoT%"] = tbl_lo["SoT%"].apply(lambda v: f"{f(v):.1f}%" if v else "—")
+        for xc in ["xG/90","xA/90","xP/90","P%","PP/90","Åter/90"]:
+            if xc in tbl_lo.columns:
+                tbl_lo[xc] = tbl_lo[xc].apply(lambda v: f"{f(v):.2f}" if v else "—")
+        st.dataframe(tbl_lo, use_container_width=True, hide_index=True, height=460)
 
-        st.markdown("### Spelarprofil per lag")
-        team_pick=st.selectbox("Välj lag", sq_df["squad"].tolist(),
-                                label_visibility="collapsed",key="sq_team")
-        if team_pick and not df_all.empty:
-            tp = df_all[df_all.squad==team_pick].sort_values("min",ascending=False)
-            p_pick = st.selectbox("Välj spelare", tp["name"].tolist(),
-                                   label_visibility="collapsed",key="sq_player")
-            if p_pick:
-                p_dict = tp[tp.name==p_pick].iloc[0].to_dict()
-                pg = pos_group(p_dict.get("pos",""))
-                chosen, show_avg = radar_config("sq_radar", pg)
-                if len(chosen) >= 3:
-                    fig = radar_chart([(p_pick, p_dict)], chosen, season, show_avg)
-                    if fig: st.plotly_chart(fig, use_container_width=True, config={"displayModeBar":False})
-                scout_panel(p_dict, season)
+        st.divider()
+        st.markdown("### Spelarprofil")
+        team_show = team_ps.sort_values("min",ascending=False)
+        if pos_lo != "Alla":
+            team_show = team_show[team_show.pos_group == pos_lo]
+        sel_lo = st.selectbox("Välj spelare", team_show["name"].tolist(),
+                               label_visibility="collapsed", key="lo_player")
+        if sel_lo:
+            p_dict = team_show[team_show.name==sel_lo].iloc[0].to_dict()
+            pg = pos_group(p_dict.get("pos",""))
+            chosen_lo, show_avg_lo = radar_config("lo_radar", pg)
+            if len(chosen_lo) >= 3:
+                fig_lo = radar_chart([(sel_lo,p_dict)],chosen_lo,season,show_avg_lo)
+                if fig_lo: st.plotly_chart(fig_lo,use_container_width=True,config={"displayModeBar":False})
+            else:
+                st.info("Välj minst 3 axlar.")
+            st.divider()
+            scout_panel(p_dict, season)
 
 
-
-# ══ VIEW: TRANSFERSCOUT ══════════════════════════════════════════════════════
 elif "Transferscout" in view:
     st.markdown(f"# 🔍 Transferscout — Liknande spelare")
     st.caption("Hitta statistiskt liknande spelare i Allsvenskan baserat på percentilprofil")
@@ -1945,6 +2098,90 @@ elif "Formtabell" in view:
             st.plotly_chart(fig_form, use_container_width=True, config={"displayModeBar":False})
 
 
+
+# ══ VIEW: NATIONALITETER ══════════════════════════════════════════════════════
+elif "Nationaliteter" in view:
+    st.markdown(f"# 🌍 Nationaliteter — {season}")
+    nats = nats_data(season)
+    if not nats:
+        st.info("Ingen nationalitetsdata för denna säsong.")
+        st.stop()
+
+    # Season comparison dropdown
+    other_seasons = [s for s in SEASONS_AVAIL if s != season and nats_data(s)]
+    compare_season = st.selectbox("Jämför med säsong",
+        ["—"] + other_seasons, label_visibility="collapsed", key="nat_compare")
+
+    # Top nations cards
+    top_nats = sorted(nats, key=lambda x: -x.get("players",0))[:10]
+    cols_nat = st.columns(5)
+    for i, nat in enumerate(top_nats[:10]):
+        with cols_nat[i % 5]:
+            st.markdown(f"""
+<div style='background:#0a1525;border:1px solid #1a3050;border-radius:8px;
+     padding:10px;text-align:center;margin-bottom:8px;'>
+  <div style='font-size:13px;font-weight:700;color:#e2e8f0;'>{nat.get("nation","")}</div>
+  <div style='font-size:10px;color:#4a6080;'>{nat.get("code","")}</div>
+  <div style='font-size:22px;font-weight:900;color:#3a80ff;'>{nat.get("players",0)}</div>
+  <div style='font-size:9px;color:#3a5070;'>spelare</div>
+</div>""", unsafe_allow_html=True)
+
+    st.divider()
+
+    # Bar chart — all nations
+    nat_sorted = sorted(nats, key=lambda x: -x.get("players",0))[:25]
+    fig_nat = go.Figure(go.Bar(
+        x=[n.get("code","") or n.get("nation","")[:3].upper() for n in nat_sorted],
+        y=[n.get("players",0) for n in nat_sorted],
+        marker_color="#3a80ff",
+        hovertemplate="%{x}: %{y} spelare<extra></extra>",
+    ))
+    fig_nat.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#7090b0",size=11),
+        xaxis=dict(gridcolor="#1a2540",tickfont=dict(color="#a0c0e0",size=10)),
+        yaxis=dict(gridcolor="#1a2540"),
+        margin=dict(l=0,r=0,t=10,b=40), height=320,
+    )
+    st.plotly_chart(fig_nat, use_container_width=True, config={"displayModeBar":False})
+
+    # Compare with another season
+    if compare_season != "—":
+        nats2 = nats_data(compare_season)
+        nat2_idx = {n.get("code",""): n.get("players",0) for n in nats2}
+        nat1_idx = {n.get("code",""): n.get("players",0) for n in nats}
+        all_codes = sorted(set(nat1_idx)|set(nat2_idx), key=lambda c: -(nat1_idx.get(c,0)+nat2_idx.get(c,0)))[:20]
+
+        fig_cmp = go.Figure()
+        fig_cmp.add_trace(go.Bar(name=season,
+            x=all_codes, y=[nat1_idx.get(c,0) for c in all_codes],
+            marker_color="#3a80ff"))
+        fig_cmp.add_trace(go.Bar(name=compare_season,
+            x=all_codes, y=[nat2_idx.get(c,0) for c in all_codes],
+            marker_color="#f0a030"))
+        fig_cmp.update_layout(barmode="group",
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#7090b0",size=11),
+            xaxis=dict(gridcolor="#1a2540",tickfont=dict(color="#a0c0e0",size=10)),
+            yaxis=dict(gridcolor="#1a2540"),
+            legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
+            margin=dict(l=0,r=0,t=10,b=40), height=320,
+        )
+        st.markdown(f"### {season} vs {compare_season}")
+        st.plotly_chart(fig_cmp, use_container_width=True, config={"displayModeBar":False})
+
+    # Full list
+    st.divider()
+    nat_df = pd.DataFrame(sorted(nats, key=lambda x: -x.get("players",0)))
+    if not nat_df.empty:
+        ren_nat = {"nation":"Nation","code":"Kod","players":"Spelare","min":"Minuter"}
+        nat_df = nat_df.rename(columns={k:v for k,v in ren_nat.items() if k in nat_df.columns})
+        if "Minuter" in nat_df.columns:
+            nat_df["Minuter"] = nat_df["Minuter"].apply(lambda v: f"{float(v)*90:.0f}" if v else "—")
+        st.dataframe(nat_df[[c for c in ["Nation","Kod","Spelare","Minuter"] if c in nat_df.columns]],
+                     use_container_width=True, hide_index=True, height=500)
+
+
 # ══ VIEW: DOMARE ══════════════════════════════════════════════════════════════
 elif "Domare" in view:
     st.markdown(f"# 👨‍⚖️ Domare — Allsvenskan {season}")
@@ -2066,287 +2303,3 @@ elif "Domare" in view:
 
 # ══ VIEW: DOMARE ══════════════════════════════════════════════════════════════
 
-# ══ VIEW: LAGANALYS ══════════════════════════════════════════════════════════
-elif "Laganalys" in view:
-    sq_df_all = squads_df(season)
-    all_squads_list = sq_df_all["squad"].tolist() if not sq_df_all.empty else (
-        sorted(df_all["squad"].unique().tolist()) if not df_all.empty else []
-    )
-    if not all_squads_list:
-        st.warning("Ingen lagdata tillgänglig.")
-        st.stop()
-    ifk_first = ["IFK Göteborg"] + [t for t in all_squads_list if t != "IFK Göteborg"]
-
-    col_sel, col_pos = st.columns([2, 1])
-    with col_sel:
-        chosen_team = st.selectbox("", ifk_first,
-            label_visibility="collapsed", key="la_team")
-    with col_pos:
-        pos_la = st.radio("", ["Alla","GK","DF","MF","FW"],
-            horizontal=True, label_visibility="collapsed", key="la_pos")
-
-    is_ifk     = chosen_team == "IFK Göteborg"
-    team_color = "#3a80ff" if is_ifk else "#a0c0e0"
-    st.markdown(f"## {'🔵 ' if is_ifk else ''}{chosen_team} — {season}")
-
-    team_ps = df_all[df_all.squad == chosen_team].copy() if not df_all.empty else pd.DataFrame()
-    team_sq = sq_df_all[sq_df_all.squad == chosen_team].iloc[0].to_dict() \
-              if not sq_df_all.empty and chosen_team in sq_df_all.squad.values else {}
-
-    if team_ps.empty:
-        st.warning("Ingen spelardata för detta lag.")
-        st.stop()
-
-    has_xg_team   = "xGpx"    in team_ps.columns and team_ps["xGpx"].apply(f).gt(0).any()
-    has_pass_team = "pass_pct" in team_ps.columns and team_ps["pass_pct"].apply(f).gt(0).any()
-    has_run_team  = "recoveries_p90" in team_ps.columns and team_ps["recoveries_p90"].apply(f).gt(0).any()
-
-    # ── Nyckeltal
-    c1,c2,c3,c4,c5,c6,c7,c8 = st.columns(8)
-    c1.metric("⚽ Mål",        int(team_ps.gls.sum())    if "gls"  in team_ps else 0)
-    c2.metric("🎯 Assist",     int(team_ps.ast.sum())    if "ast"  in team_ps else 0)
-    c3.metric("👟 Skott",      int(team_ps.sh.sum())     if "sh"   in team_ps else 0)
-    c4.metric("🎳 SoT",        int(team_ps.sot.sum())    if "sot"  in team_ps else 0)
-    c5.metric("📊 SoT%",       f"{team_sq.get('sotPct',0):.1f}%" if team_sq else "—")
-    c6.metric("🔵 Bollinneh.", f"{team_sq.get('poss',0):.0f}%"   if team_sq else "—")
-    c7.metric("🛡 Brytningar", int(team_ps["int"].sum()) if "int"  in team_ps else 0)
-    c8.metric("🟨 Gula kort",  int(team_ps.crdY.sum())   if "crdY" in team_ps else 0)
-    st.divider()
-
-    # ── Topplistor
-    st.markdown("### Topplistor")
-    n_cols = 5 if has_xg_team else 4
-    top_cols = st.columns(n_cols)
-
-    def top5_la(col, icon, unit, target_col):
-        sub = team_ps[team_ps[col]>0].sort_values(col,ascending=False).head(5) \
-              if col in team_ps else pd.DataFrame()
-        with target_col:
-            st.markdown(f"**{icon} {unit}**")
-            for _,r in sub.iterrows():
-                v = f(r[col])
-                disp = f"{v:.2f}" if v != int(v) and v < 10 else str(int(v))
-                st.markdown(f"**{r['name'].split()[-1]}** — {disp}")
-
-    top5_la("gls",  "⚽","Mål",    top_cols[0])
-    top5_la("ast",  "🎯","Assist", top_cols[1])
-    with top_cols[2]:
-        st.markdown("**⏱ Spelade minuter**")
-        sub = team_ps.sort_values("min",ascending=False).head(5) if "min" in team_ps else pd.DataFrame()
-        for _,r in sub.iterrows():
-            st.markdown(f"**{r['name'].split()[-1]}** — {int(r['min']):,}".replace(",",".")+" m")
-    top5_la("sh",   "👟","Skott",  top_cols[3])
-    if has_xg_team and n_cols > 4:
-        top5_la("xGpx","📈","xG/90", top_cols[4])
-
-    st.divider()
-
-    # ── Spelarbidrag med flikar
-    st.markdown("### Spelarbidrag")
-
-    tab_names = ["⚽ Mål & Assist","👟 Skott & SoT","🛡 Försvar","📈 xG & xA","🎯 Passningar","🏃 Löpningar"]
-    tabs = st.tabs(tab_names)
-
-    with tabs[0]:
-        top_c = team_ps[team_ps.gPluA>0].sort_values("gPluA",ascending=True).tail(14) \
-                if "gPluA" in team_ps.columns else pd.DataFrame()
-        if not top_c.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name="Mål",y=top_c.name,x=top_c.gls,orientation="h",
-                marker_color=team_color,marker_line_width=0))
-            fig.add_trace(go.Bar(name="Assist",y=top_c.name,x=top_c.ast,orientation="h",
-                marker_color="#00e8c8",marker_line_width=0))
-            fig.update_layout(barmode="stack",paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_c)*32))
-            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-    with tabs[1]:
-        top_sh = team_ps[team_ps.sh>0].sort_values("sh",ascending=True).tail(14) \
-                 if "sh" in team_ps.columns else pd.DataFrame()
-        if not top_sh.empty:
-            fig = go.Figure()
-            fig.add_trace(go.Bar(name="Skott",y=top_sh.name,x=top_sh.sh,orientation="h",
-                marker_color="#f0a030",marker_line_width=0))
-            fig.add_trace(go.Bar(name="SoT",y=top_sh.name,x=top_sh.sot,orientation="h",
-                marker_color="#30c060",marker_line_width=0))
-            fig.update_layout(barmode="group",paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_sh)*32))
-            st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-    with tabs[2]:
-        if "int" in team_ps.columns:
-            top_def = team_ps.copy()
-            top_def["def_total"] = top_def["int"].apply(f)+top_def["tklW"].apply(f)
-            top_def = top_def[top_def.def_total>0].sort_values("def_total",ascending=True).tail(14)
-            if not top_def.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(name="Brytningar",y=top_def.name,
-                    x=top_def["int"],orientation="h",marker_color="#30c060",marker_line_width=0))
-                fig.add_trace(go.Bar(name="Tacklingar",y=top_def.name,
-                    x=top_def.tklW,orientation="h",marker_color="#a050e0",marker_line_width=0))
-                fig.update_layout(barmode="stack",paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                    xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                    legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_def)*32))
-                st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-    with tabs[3]:
-            top_xg = team_ps.copy()
-            top_xg["xGpx_v"] = top_xg["xGpx"].apply(f)
-            top_xg = top_xg[top_xg.xGpx_v > 0].sort_values("xGpx_v",ascending=True).tail(14)
-            if not top_xg.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(name="xG/90",y=top_xg.name,x=top_xg.xGpx_v,
-                    orientation="h",marker_color="#20c060",marker_line_width=0))
-                xapx = top_xg["xApx"].apply(f)
-                if xapx.gt(0).any():
-                    fig.add_trace(go.Bar(name="xA/90",y=top_xg.name,x=xapx,
-                        orientation="h",marker_color="#3a80ff",marker_line_width=0))
-                fig.update_layout(barmode="group",paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                    xaxis=dict(gridcolor="#1a2540",title="Per 90 minuter"),
-                    yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                    legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_xg)*32))
-                st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-                # xG vs faktiska mål scatterplot
-                st.markdown("#### xG vs Faktiska mål")
-                scatter_ps = team_ps[team_ps["xGpx"].apply(f)>0].copy()
-                if not scatter_ps.empty:
-                    gls_v  = scatter_ps["gls"].apply(f).tolist()
-                    xg_v   = scatter_ps["xG"].apply(f).tolist()
-                    diff_v = [g-x for g,x in zip(gls_v,xg_v)]
-                    dot_c  = ["#30c060" if d>0.5 else "#e05050" if d<-0.5 else "#f0a030" for d in diff_v]
-                    min_v  = scatter_ps["min"].apply(f).tolist()
-                    fig2 = go.Figure()
-                    fig2.add_trace(go.Scatter(
-                        x=xg_v, y=gls_v, mode="markers+text",
-                        text=[n.split()[-1] for n in scatter_ps["name"].tolist()],
-                        textposition="top center",
-                        textfont=dict(color="#a0c8ff",size=10),
-                        marker=dict(size=[max(m/100,8) for m in min_v],
-                                    color=dot_c,line=dict(color="white",width=1)),
-                        hovertemplate="<b>%{text}</b><br>xG: %{x:.2f}<br>Mål: %{y}<extra></extra>",
-                    ))
-                    max_val = max(max(xg_v)+0.5, max(gls_v)+0.5, 1)
-                    fig2.add_shape(type="line",x0=0,y0=0,x1=max_val,y1=max_val,
-                        line=dict(color="#3a5070",dash="dot",width=1))
-                    fig2.add_annotation(x=max_val*0.85,y=max_val*0.95,
-                        text="xG = Mål",font=dict(color="#3a5070",size=10),showarrow=False)
-                    fig2.update_layout(paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                        xaxis=dict(gridcolor="#1a2540",title="Förväntat (xG)"),
-                        yaxis=dict(gridcolor="#1a2540",title="Faktiska mål"),
-                        margin=dict(l=0,r=0,t=20,b=40),height=340)
-                    st.plotly_chart(fig2,use_container_width=True,config={"displayModeBar":False})
-                    st.caption("🟢 Överpresterar  🔴 Underpresterar  🟡 Som förväntat | Bubbelstorlek = minuter")
-
-    with tabs[4]:
-            top_p = team_ps[team_ps["pass_total"].apply(f)>0].sort_values(
-                "pass_total", ascending=True).tail(14) if "pass_total" in team_ps.columns else pd.DataFrame()
-            if not top_p.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(name="Passningar",y=top_p.name,
-                    x=top_p["pass_total"].apply(f),orientation="h",
-                    marker_color="#3a80ff",marker_line_width=0))
-                fig.add_trace(go.Bar(name="Prog. pass",y=top_p.name,
-                    x=top_p["prog_pass"].apply(f) if "prog_pass" in top_p.columns else [0]*len(top_p),
-                    orientation="h",marker_color="#00e8c8",marker_line_width=0))
-                fig.update_layout(barmode="group",paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                    xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                    legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_p)*32))
-                st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-                # Pass % scatter
-                st.markdown("#### Passningsprocent")
-                pct_ps = team_ps[team_ps["pass_pct"].apply(f)>0].copy() \
-                         if "pass_pct" in team_ps.columns else pd.DataFrame()
-                if not pct_ps.empty:
-                    pct_ps = pct_ps.sort_values("pass_pct",ascending=False)
-                    fig3 = go.Figure(go.Bar(
-                        x=pct_ps["name"].apply(lambda n: n.split()[-1]),
-                        y=pct_ps["pass_pct"].apply(f),
-                        marker=dict(color=[team_color if nm==chosen_team else "#1a3050"
-                                          for nm in pct_ps["squad"]],
-                                   line_width=0),
-                        hovertemplate="%{x}<br>Pass%: %{y:.1f}%<extra></extra>",
-                    ))
-                    fig3.update_layout(paper_bgcolor="rgba(0,0,0,0)",
-                        plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                        xaxis=dict(gridcolor="#1a2540",tickangle=-35,tickfont=dict(size=9)),
-                        yaxis=dict(gridcolor="#1a2540",range=[50,100]),
-                        margin=dict(l=0,r=0,t=10,b=60),height=280)
-                    st.plotly_chart(fig3,use_container_width=True,config={"displayModeBar":False})
-
-    with tabs[5]:
-            top_r = team_ps[team_ps["recoveries"].apply(f)>0].sort_values(
-                "recoveries",ascending=True).tail(14) if "recoveries" in team_ps.columns else pd.DataFrame()
-            if not top_r.empty:
-                fig = go.Figure()
-                fig.add_trace(go.Bar(name="Återerövringar",y=top_r.name,
-                    x=top_r["recoveries"].apply(f),orientation="h",
-                    marker_color="#20a050",marker_line_width=0))
-                pc_vals = top_r["prog_carries"].apply(f) if "prog_carries" in top_r.columns else None
-                if pc_vals is not None and pc_vals.gt(0).any():
-                    fig.add_trace(go.Bar(name="Prog. löpningar",y=top_r.name,
-                        x=pc_vals,orientation="h",marker_color="#f0a030",marker_line_width=0))
-                fig.update_layout(barmode="group",paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",font=dict(color="#7090b0",size=11),
-                    xaxis=dict(gridcolor="#1a2540"),yaxis=dict(tickfont=dict(color="#c0d8f0",size=11)),
-                    legend=dict(font=dict(color="#a0c0e0"),bgcolor="rgba(0,0,0,0)"),
-                    margin=dict(l=0,r=20,t=10,b=20),height=max(320,len(top_r)*32))
-                st.plotly_chart(fig,use_container_width=True,config={"displayModeBar":False})
-
-    st.divider()
-
-    # ── Detaljerad tabell
-    st.markdown("### Spelartabell")
-    tbl_cols = ["name","pos","age","mp","min","gls","ast","sh","sot","sotPct","int","tklW","crdY"]
-    if has_xg_team:
-        tbl_cols += ["xGpx","xApx","xPpx"]
-    if has_pass_team:
-        tbl_cols += ["pass_pct","prog_pass_p90"]
-    avail = [c for c in tbl_cols if c in team_ps.columns]
-    ren = {"name":"Spelare","pos":"Pos","age":"Ålder","mp":"M","min":"Min",
-           "gls":"Mål","ast":"Ass","sh":"Skott","sot":"SoT","sotPct":"SoT%",
-           "int":"Bryt","tklW":"Tackl","crdY":"GK","xGpx":"xG/90",
-           "xApx":"xA/90","xPpx":"xP/90","pass_pct":"Pass%","prog_pass_p90":"PP/90"}
-    tbl = team_ps.sort_values("min",ascending=False)[avail].rename(columns=ren).reset_index(drop=True)
-    if "Min"   in tbl: tbl["Min"]   = tbl["Min"].apply(lambda v: str(int(f(v))).replace(",",".") if v else "—")
-    if "SoT%"  in tbl: tbl["SoT%"]  = tbl["SoT%"].apply(lambda v: f"{f(v):.1f}%" if v else "—")
-    if "Pass%" in tbl: tbl["Pass%"] = tbl["Pass%"].apply(lambda v: f"{f(v):.1f}%" if v else "—")
-    for xcol in ["xG/90","xA/90","xP/90","PP/90"]:
-        if xcol in tbl: tbl[xcol] = tbl[xcol].apply(lambda v: f"{f(v):.2f}" if v else "—")
-    st.dataframe(tbl, use_container_width=True, hide_index=True,
-                 height=min(600, max(300, len(tbl)*36)))
-
-    st.divider()
-
-    # ── Spelarprofil
-    st.markdown("### Spelarprofil")
-    team_show = team_ps.sort_values("min",ascending=False)
-    if pos_la != "Alla":
-        team_show = team_show[team_show.pos_group == pos_la]
-    sel_la = st.selectbox("Välj spelare", team_show["name"].tolist(),
-                           label_visibility="collapsed", key="la_player")
-    if sel_la:
-        p_dict = team_show[team_show.name==sel_la].iloc[0].to_dict()
-        pg = pos_group(p_dict.get("pos",""))
-        chosen_la, show_avg_la = radar_config("la_radar", pg)
-        if len(chosen_la) >= 3:
-            fig_la = radar_chart([(sel_la,p_dict)],chosen_la,season,show_avg_la)
-            if fig_la: st.plotly_chart(fig_la,use_container_width=True,config={"displayModeBar":False})
-        else:
-            st.info("Välj minst 3 axlar.")
-        st.divider()
-        scout_panel(p_dict, season)

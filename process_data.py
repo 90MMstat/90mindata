@@ -23,7 +23,9 @@ def to_float(v):
     if isinstance(v, datetime.time):
         return round(v.hour + v.minute / 100.0 + v.second / 10000.0, 4)
     if isinstance(v, str):
-        try:   return float(v.replace(',', '.'))
+        s = v.strip().replace(',', '.')
+        if not s or s in ('-','—','N/A'): return 0.0
+        try:   return float(s)
         except: return 0.0
     try: return float(v)
     except: return 0.0
@@ -259,7 +261,10 @@ def build_player(std, sh, misc, gk, pt, xg_row, competition="allsvenskan"):
     p["nation"]      = clean_nation(src.get("Nation",""))
     p["pos"]         = str(src.get("Pos","")).strip()
     p["squad"]       = clean_squad(src.get("Squad",""))
-    p["age"]         = to_int(src.get("Age",0))
+    raw_age = src.get("Age", 0)
+    if raw_age and isinstance(raw_age, str) and "-" in str(raw_age):
+        raw_age = str(raw_age).split("-")[0]  # "27-280" → "27"
+    p["age"]         = to_int(raw_age)
     p["competition"] = competition
 
     if std:
@@ -459,11 +464,11 @@ def process_competition(comp_dir, year, competition="allsvenskan"):
 
     def af(pats): return auto_find(comp_dir, pats)
 
-    std_r  = idx(read_sheet(af(["*Standard Stats*","*standard*"])))
-    sh_r   = idx(read_sheet(af(["*Shooting*","*shooting*"])))
-    misc_r = idx(read_sheet(af(["*Miscellaneous*","*misc*","*Misc*"])))
-    gk_r   = idx(read_sheet(af(["*Goalkeeping*","*goalkeeping*","*GK*"])))
-    pt_r   = idx(read_sheet(af(["*Playing Time*","*playing*"])))
+    std_r  = idx(read_sheet(af([f"*Standard Stats*{year}*", f"*Standard*{year}*", "*Standard Stats*","*standard*"])))
+    sh_r   = idx(read_sheet(af([f"*Shooting*{year}*", "*Shooting*","*shooting*"])))
+    misc_r = idx(read_sheet(af([f"*Miscellaneous*{year}*", "*Miscellaneous*","*misc*","*Misc*"])))
+    gk_r   = idx(read_sheet(af([f"*Goalkeeping*{year}*", f"*Goalkeeper*{year}*", "*Goalkeeping*","*goalkeeping*","*GK*"])))
+    pt_r   = idx(read_sheet(af([f"*Playing Time*{year}*", "*Playing Time*","*playing*"])))
     xg_r   = idx(read_sheet(af([
         "*Expected*","*xG*","*xg*","*Advanced*","*advanced*"
     ])))
