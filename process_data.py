@@ -77,17 +77,25 @@ def read_sheet(path):
         seen[key] = cnt
         cols.append(f"{key}_{cnt}" if cnt > 1 else key)
     records = []
+    main_header_set = set(c for c in cols if c and c != '_')
     for row in rows[header_idx + 1:]:
         if not any(row): continue
         d = dict(zip(cols, row))
         player_val = d.get("Player")
         squad_val  = d.get("Squad")
-        # Skip header/empty marker rows
+        # Detect mid-table header row with DIFFERENT columns (different table section)
+        # e.g. FBRef appends Playing Time table after Shooting table in same file
+        if player_val == "Player" and squad_val == "Squad":
+            # Check if column structure differs from main header
+            new_cols = [str(v).strip() if v else '' for v in row[:len(cols)]]
+            new_set  = set(c for c in new_cols if c and c not in ('Rk','Player','Nation','Pos','Squad','Age','Born','_'))
+            old_set  = set(c for c in cols if c not in ('Rk','Player','Nation','Pos','Squad','Age','Born','_'))
+            if new_set != old_set and len(new_set & old_set) < len(old_set) // 2:
+                break  # Different table structure — stop reading
+            continue  # Same structure repeat header — skip and continue
         if player_val in ('Player', 'Matches'): continue
         if squad_val  in ('Squad',):            continue
-        # Skip completely empty rows
         if player_val is None and squad_val is None: continue
-        # Squad-only rows (no Player col) are valid — keep them
         records.append(d)
     return records
 
@@ -557,7 +565,9 @@ def parse_extra_file(path):
     except Exception as e:
         print(f"    ⚠ Extra-fil fel: {e}"); return {}, []
 
+    # Stöder både 2025-format (Passning_2025) och 2026-format (Statistik_2026)
     SHEET_COLS = {
+        # ── 2025-format ──────────────────────────────
         "PASSNINGAR & PASSNINGSPROCENT": {"pass_total":5,"pass_complete":6,"pass_pct":7},
         "Framåtpassningar":              {"fwd_pass":5,"fwd_pass_comp":6,"fwd_pass_pct":7},
         "Huvudspel & luftdueller":       {"headers_won":5,"headers_pct":6,"np_duels":7,"np_duels_pct":8},
@@ -565,6 +575,21 @@ def parse_extra_file(path):
         "ACC. & PROGRESSIVA LÖPNINGAR  i":{"acc_carries":5,"prog_carries":6,"acc_p90":7,"prog_carries_p90":8},
         "Återerövringar":                {"recoveries":5,"recoveries_p90":6},
         "Lång passningar & genomskärare":{"long_pass":5,"through_balls":6,"long_through_p90":7},
+        # ── 2026-format ──────────────────────────────
+        "MÅL & xG":                      {"gls_file":5,"shot_acc_pct":6,"glsPer90_file":7},
+        "xG, xA & xP":                   {"xG":5,"xA":6,"xP":7},
+        "ASSIST & xA":                    {"ast_file":5,"ast_pct":6,"astPer90_file":7},
+        "Poäng & xP":                     {"g_plus_a_file":5,"xP_file":6},
+        "Hockeyassist":                   {"second_ast":5,"second_ast_p90":6},
+        "Målchanser":                     {"chances_created":5,"chances_p90":6},
+        "Nyckelpassningar":               {"key_passes":6,"key_passes_p90":7},
+        "PROGRESSIVA PASSNINGAR":         {"prog_pass":5,"prog_pass_pct":6,"prog_pass_p90":7},
+        "Långa passningar & genomskärare":{"long_pass":5,"through_balls":6,"long_through_p90":7},
+        "Duellerspel":                    {"od_duels":5,"od_duels_pct":6,"dd_duels":7},
+        "Återerövringar":                 {"recoveries":5,"recoveries_p90":6},
+        "Offsides":                       {"off_file":5,"off_p90":6},
+        "Kort":                           {"crdY_file":5,"crdR_file":6,"crdY_p90":7},
+        "Acc. och Progressiva löpningar": {"acc_carries":5,"prog_carries":6,"acc_p90":7,"prog_carries_p90":8},
     }
     player_data = {}
     domare_list = []
@@ -769,12 +794,27 @@ if __name__ == "__main__":
             print(f"    ✓ Nationaliteter: {len(nationalities)} länder")
 
         # ── Extra statistik-fil (passningar, löpningar etc.)
-        extra_path = find_file(DATA_ROOT, [
-            f"Passning_{year}.xlsx",
-            f"*Passning*{year}*",
-            f"*{year}*Passning*",
-            f"*extra*{year}*",
-        ])
+        # Sök extrastatistikfil i flera mappar (Passning_YYYY, Statistik_YYYY etc.)
+        extra_path = None
+        for search_dir in [
+            DATA_ROOT,
+            os.path.join(DATA_ROOT, "Player", year),
+            os.path.join(DATA_ROOT, "Squad",  year),
+            year_player,
+        ]:
+            if not os.path.isdir(search_dir): continue
+            extra_path = find_file(search_dir, [
+                f"Passning_{year}.xlsx",
+                f"Statistik_{year}.xlsx",
+                f"*Passning*{year}*",
+                f"*Statistik*{year}*",
+                f"*{year}*Passning*",
+                f"*{year}*Statistik*",
+                f"Passning_{year[2:]}.xlsx",   # e.g. Passning_25.xlsx
+                f"*extra*{year}*",
+            ])
+            if extra_path:
+                break
         extra_players, domare = {}, []
         if extra_path:
             extra_players, domare = parse_extra_file(extra_path)
@@ -782,8 +822,25 @@ if __name__ == "__main__":
             for p in all_players:
                 key = _extra_abbrev_key(p.get("name",""))
                 if key and key in extra_players:
-                    extras = {k:v for k,v in extra_players[key].items() if not k.startswith("_")}
-                    p.update(extras)
+                    extras = extra_players[key]
+                    for k, v in extras.items():
+                        if k.startswith("_"): continue
+                        # Don't overwrite FBRef stats with file stats
+                        # (file stats use _file suffix for duplicates)
+                        if k.endswith("_file"): continue
+                        # Only set if not already present from FBRef
+                        if not p.get(k) or p.get(k) == 0:
+                            p[k] = v
+                    # If xG came from extra file, compute per90 fields
+                    n90 = max(p.get("nineties", 0), 0.1)
+                    if extras.get("xG") and not p.get("xGpx"):
+                        p["xGpx"] = round(extras["xG"] / n90, 3)
+                    if extras.get("xA") and not p.get("xApx"):
+                        p["xApx"] = round(extras["xA"] / n90, 3)
+                    if extras.get("xP") and not p.get("xPpx"):
+                        p["xPpx"] = round(extras["xP"] / n90, 3)
+                    if extras.get("xG") and p.get("gls") is not None:
+                        p["gMinusXG"] = round(p.get("gls",0) - extras["xG"], 2)
 
         output["seasons"][year] = {
             "players":         all_players,
