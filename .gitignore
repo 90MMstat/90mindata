@@ -8,7 +8,7 @@ dist/
 build/
 
 # Data files (stora — commitas inte)
-90minutersdata/
+# 90minutersdata/
 .fbref_cache/
 
 # Backup-filer
