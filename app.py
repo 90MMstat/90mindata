@@ -1178,7 +1178,7 @@ elif "Lagöversikt" in view:
                 if not top_cmp.empty:
                     fig_cmp = go.Figure()
                     fig_cmp.add_trace(go.Bar(name="xG",y=top_cmp.name,x=top_cmp["xG"].apply(f),
-                        orientation="h",marker_color="#20c06099",marker_line_width=0))
+                        orientation="h",marker_color="rgba(32,192,96,0.6)",marker_line_width=0))
                     fig_cmp.add_trace(go.Bar(name="Faktiska mål",y=top_cmp.name,x=top_cmp["gls"].apply(f),
                         orientation="h",marker_color=team_color,marker_line_width=0))
                     fig_cmp.update_layout(barmode="overlay",paper_bgcolor="rgba(0,0,0,0)",
