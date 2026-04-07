@@ -124,6 +124,21 @@ ALL_RADAR = {
     "Felspel/90":      ("flsPer90",  3.0,  True ),
     "SoT/90":          ("sotPer90",  3.0,  False),
     "Offside":         ("off",       20,   True ),
+    # Passningar (från extra-fil)
+    "Passn.%":         ("pass_pct",        100,  False),
+    "Prog.pass/90":    ("prog_pass_p90",   20,   False),
+    "Framåtpass%":     ("fwd_pass_pct",    100,  False),
+    "Långa pass":      ("long_pass",       200,  False),
+    "Genomskärare":    ("through_balls",   30,   False),
+    "Nyckelpass/90":   ("key_passes_p90",  5,    False),
+    # Löpningar & dueljer
+    "Återerövr./90":   ("recoveries_p90", 15,   False),
+    "Prog.löpn./90":   ("prog_carries_p90",10,  False),
+    "Luftduell%":      ("headers_pct",     100,  False),
+    "Närkamp%":        ("np_duels_pct",    100,  False),
+    # Målchanser (2026)
+    "Målchanser/90":   ("chances_p90",     10,   False),
+    "Hockeyast./90":   ("second_ast_p90",  2,    False),
     "Räddn%  (MV)":    ("gkSavePct", 100,  False),
     "IM/90  (MV)":     ("gkGA90",    3.0,  True ),
     "Nollor%  (MV)":   ("gkCSPct",   100,  False),
@@ -133,8 +148,8 @@ ALL_RADAR = {
 
 DEFAULT_RADAR = {
     "GK": ["Räddn%  (MV)","IM/90  (MV)","Nollor%  (MV)","Räddningar (MV)","Vinster (MV)"],
-    "DF": ["Brytningar/90","Tacklingar/90","Inlägg","Mål/90","Assist/90"],
-    "MF": ["Mål/90","Assist/90","xG/90","xA/90","Skott/90","Brytningar/90","Tacklingar/90"],
+    "DF": ["Brytningar/90","Tacklingar/90","Passn.%","Återerövr./90","Luftduell%","Mål/90"],
+    "MF": ["Mål/90","Assist/90","xG/90","xA/90","Passn.%","Prog.pass/90","Återerövr./90"],
     "FW": ["Mål/90","Assist/90","xG/90","xA/90","Skott/90","SoT%","Mål/Skott"],
     "U":  ["Mål/90","Assist/90","Skott/90","Brytningar/90","Tacklingar/90"],
 }
