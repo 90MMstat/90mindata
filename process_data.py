@@ -667,6 +667,68 @@ def parse_nationality_file(path):
     return out
 
 
+# ── Multi-fil mapp parser (Omgång X format) ──────────────────────────────────
+
+# Mapping: filename → [(stat_key, col_idx, scale)]
+# scale: 1=real int, 10=÷10 (%), 100=÷100 (/90 values), 1000=÷1000 (xG etc.)
+OMGANG_FILE_MAP = {
+    "mal-xg.xlsx":              [("mp",3,1),("min",4,1),("gls",5,1),("shot_acc_pct",6,10),("glsPer90",7,100),("xG",8,1000),("xGpx",9,1000)],
+    "xg-xa-xp.xlsx":            [("xG",5,1000),("xA",6,1000),("xP",7,1000),("xPpx",8,1000)],
+    "mal-assist-poang.xlsx":    [("gls",5,1),("ast",6,1),("gPluA",7,1),("gPluA_pct",8,10),("gPluA_p90",9,100)],
+    "poang-xp-differens.xlsx":  [("gPluA_f",5,1),("xP_f",6,1000),("xP_diff",7,1000),("xPpx",8,1000)],
+    "passningar.xlsx":          [("mp",3,1),("min",4,1),("pass_total",5,1),("pass_complete",6,1),("pass_pct",7,10)],
+    "framatpassningar.xlsx":    [("fwd_pass",5,1),("fwd_pass_comp",6,1),("fwd_pass_pct",7,10)],
+    "progressiva-passningar.xlsx": [("prog_pass",5,1),("prog_pass_pct",6,10),("prog_pass_p90",7,100)],
+    "langpass-genomskarare.xlsx": [("long_pass",5,1),("through_balls",6,1),("long_through_p90",7,100)],
+    "nyckelpassningar.xlsx":    [("pass_total_f",5,1),("key_passes",6,1),("key_passes_p90",7,100)],
+    "smarta-passningar.xlsx":   [("smart_pass",5,1),("smart_pass_pct",6,10),("smart_pass_p90",7,100)],
+    "skottassist.xlsx":         [("shot_assist",5,1),("shot_assist_pct",6,10),("shot_assist_p90",7,100)],
+    "andraassist.xlsx":         [("second_ast",5,1),("second_ast_p90",6,100)],
+    "malchanser.xlsx":          [("chances_created",5,1),("chances_p90",6,100)],
+    "lopningar-accelerationer.xlsx": [("acc_carries",5,1),("prog_carries",6,1),("acc_p90",7,100),("prog_carries_p90",8,100)],
+    "atererovringar.xlsx":      [("recoveries",5,1),("recoveries_p90",6,100)],
+    "huvudspel-luftdueller.xlsx": [("headers_won",5,1),("headers_pct",6,10),("np_duels",7,1),("np_duels_pct",8,10)],
+    "offsides.xlsx":            [("off",5,1),("off_p90",6,100)],
+    "kort.xlsx":                [("crdY_f",5,1),("crdR_f",6,1),("crdY_p90",7,100)],
+    "malvakter.xlsx":           [("gk_sota_f",5,1),("gkGA_f",6,1),("gkCS_f",7,1),("gkSavePct_f",8,10),("gk_fm",9,1000)],
+}
+
+def parse_omgang_folder(folder_path):
+    """Läs ett mapp med enskilda xlsx-filer (Omgång-format).
+    Returnerar (player_data_dict, []) — inga domardata i detta format.
+    """
+    if not folder_path or not os.path.isdir(folder_path): return {}, []
+    
+    player_data = {}
+    total = 0
+    for fn, cols in OMGANG_FILE_MAP.items():
+        path = os.path.join(folder_path, fn)
+        if not os.path.exists(path): continue
+        try:
+            wb = openpyxl.load_workbook(path, data_only=True)
+        except Exception: continue
+        ws = wb.active
+        for row in list(ws.iter_rows(values_only=True))[1:]:
+            raw = row[1] if len(row) > 1 else None
+            if not raw: continue
+            name = _dedupe_extra(str(raw))
+            key  = _extra_abbrev_key(name)
+            if not key: continue
+            if key not in player_data:
+                player_data[key] = {"_abbrev": name}
+            for stat_key, col_idx, scale in cols:
+                if col_idx < len(row) and row[col_idx] is not None:
+                    v = safe_f(row[col_idx])
+                    if v is not None and not stat_key.endswith("_f"):
+                        player_data[key][stat_key] = round(v / scale, 4) if scale > 1 else v
+            total += 1
+    
+    unique = len(player_data)
+    if unique > 0:
+        print(f"      → Omgång-mapp: {unique} spelare ({total} rader)")
+    return player_data, []
+
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("Allsvenskan Analytics — Dataprocessor v2")
@@ -794,8 +856,9 @@ if __name__ == "__main__":
             print(f"    ✓ Nationaliteter: {len(nationalities)} länder")
 
         # ── Extra statistik-fil (passningar, löpningar etc.)
-        # Sök extrastatistikfil i flera mappar (Passning_YYYY, Statistik_YYYY etc.)
+        # Sök extrastatistikfil — enskild fil ELLER omgångsmapp
         extra_path = None
+        omgang_path = None
         for search_dir in [
             DATA_ROOT,
             os.path.join(DATA_ROOT, "Player", year),
@@ -803,6 +866,14 @@ if __name__ == "__main__":
             year_player,
         ]:
             if not os.path.isdir(search_dir): continue
+            # Kolla om det finns en undermapp med omgångsformat (innehåller mal-xg.xlsx etc.)
+            for subdir in sorted(os.listdir(search_dir), reverse=True):
+                sub_path = os.path.join(search_dir, subdir)
+                if os.path.isdir(sub_path) and os.path.exists(os.path.join(sub_path,"mal-xg.xlsx")):
+                    omgang_path = sub_path
+                    break
+            if omgang_path: break
+            # Annars sök enskild fil
             extra_path = find_file(search_dir, [
                 f"Passning_{year}.xlsx",
                 f"Statistik_{year}.xlsx",
@@ -810,28 +881,33 @@ if __name__ == "__main__":
                 f"*Statistik*{year}*",
                 f"*{year}*Passning*",
                 f"*{year}*Statistik*",
-                f"Passning_{year[2:]}.xlsx",   # e.g. Passning_25.xlsx
+                f"Passning_{year[2:]}.xlsx",
                 f"*extra*{year}*",
             ])
             if extra_path:
                 break
         extra_players, domare = {}, []
-        if extra_path:
+        if omgang_path:
+            extra_players, domare = parse_omgang_folder(omgang_path)
+        elif extra_path:
             extra_players, domare = parse_extra_file(extra_path)
-            # Merge extra stats into player objects
+
+        # Merge extra stats into player objects (works for both omgang and single-file)
+        if extra_players:
             for p in all_players:
                 key = _extra_abbrev_key(p.get("name",""))
                 if key and key in extra_players:
                     extras = extra_players[key]
                     for k, v in extras.items():
                         if k.startswith("_"): continue
-                        # Don't overwrite FBRef stats with file stats
-                        # (file stats use _file suffix for duplicates)
                         if k.endswith("_file"): continue
-                        # Only set if not already present from FBRef
-                        if not p.get(k) or p.get(k) == 0:
+                        # Always update mp and min (more current in Omgång than FBRef)
+                        if k in ("mp", "min"):
+                            if v and v > (p.get(k) or 0):
+                                p[k] = v
+                        elif not p.get(k) or p.get(k) == 0:
                             p[k] = v
-                    # If xG came from extra file, compute per90 fields
+                    # Compute per90 xG fields if missing
                     n90 = max(p.get("nineties", 0), 0.1)
                     if extras.get("xG") and not p.get("xGpx"):
                         p["xGpx"] = round(extras["xG"] / n90, 3)
